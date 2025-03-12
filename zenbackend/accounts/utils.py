@@ -378,9 +378,7 @@ def fetch_campaigns_facebook():
                 )
                 print("facebook campaigns data created successfully")
 
-            else:
-                print("Token generation failed. Aborting request.")
-                return
+
 
             
         else:
