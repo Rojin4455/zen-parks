@@ -8,4 +8,6 @@ urlpatterns = [
     # path('api/get-appoinments/',scheduled_appointment_sync),
     # path('api/fetch/facebook/', fetch_campaigns_facebook),
     # path('api/fetch/google/', fetch_and_store_google_campaigns),
+    path("create-opportunity", webhook_handler_for_opportunity),
+    path("create-budget", budget_webhook_handler)
 ]

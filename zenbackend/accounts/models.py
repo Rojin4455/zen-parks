@@ -154,3 +154,44 @@ class IdentityToolkitAuth(models.Model):
     is_new_user = models.BooleanField()
     created_at = models.DateTimeField(auto_now_add=True)
 
+
+
+
+
+
+class Opportunity(models.Model):
+    contact_id = models.CharField(max_length=255, null=True, blank=True)
+    opportunity_id = models.CharField(max_length=255, null=True, blank=True)
+    full_name = models.CharField(max_length=255, null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)
+    phone = models.CharField(max_length=20, null=True, blank=True)
+    tags = models.CharField(max_length=255, null=True, blank=True)
+    date_created = models.DateTimeField(null=True, blank=True)
+    opportunity_name = models.CharField(max_length=255, null=True, blank=True)
+    status = models.CharField(max_length=50, null=True, blank=True)
+    lead_value = models.IntegerField(null=True, blank=True)
+    source = models.CharField(max_length=255, null=True, blank=True)
+    pipeline_stage = models.CharField(max_length=255, null=True, blank=True)
+    pipeline_id = models.CharField(max_length=255, null=True, blank=True)
+    pipeline_name = models.CharField(max_length=255, null=True, blank=True)
+    location_name = models.CharField(max_length=255, null=True, blank=True)
+    location_id = models.CharField(max_length=255, null=True, blank=True)
+    sq_ft = models.CharField(max_length=50, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.full_name or "Unnamed Opportunity"
+    
+
+class Budget(models.Model):
+    budgeted_sq_ft = models.IntegerField(null=True, blank=True)
+    budget_date = models.DateField(null=True, blank=True)
+    budgeted_revenue = models.IntegerField(null=True, blank=True)
+    location_name = models.CharField(max_length=255, null=True, blank=True)
+    location_id = models.CharField(max_length=255, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Budget for {self.location_name or 'Unknown Location'}"
+
+
