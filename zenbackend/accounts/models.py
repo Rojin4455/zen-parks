@@ -159,28 +159,38 @@ class IdentityToolkitAuth(models.Model):
 
 
 
+
 class Opportunity(models.Model):
     contact_id = models.CharField(max_length=255, null=True, blank=True)
-    opportunity_id = models.CharField(max_length=255, null=True, blank=True)
-    full_name = models.CharField(max_length=255, null=True, blank=True)
-    email = models.EmailField(null=True, blank=True)
-    phone = models.CharField(max_length=20, null=True, blank=True)
-    tags = models.CharField(max_length=255, null=True, blank=True)
     date_created = models.DateTimeField(null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)
+    full_name = models.CharField(max_length=255, null=True, blank=True)
     opportunity_name = models.CharField(max_length=255, null=True, blank=True)
-    status = models.CharField(max_length=50, null=True, blank=True)
+    phone = models.CharField(max_length=20, null=True, blank=True)
+    pipeline_name = models.CharField(max_length=255, null=True, blank=True)
+    pipeline_stage = models.CharField(max_length=255, null=True, blank=True)
     lead_value = models.IntegerField(null=True, blank=True)
     source = models.CharField(max_length=255, null=True, blank=True)
-    pipeline_stage = models.CharField(max_length=255, null=True, blank=True)
-    pipeline_id = models.CharField(max_length=255, null=True, blank=True)
-    pipeline_name = models.CharField(max_length=255, null=True, blank=True)
-    location_name = models.CharField(max_length=255, null=True, blank=True)
-    location_id = models.CharField(max_length=255, null=True, blank=True)
+    assigned = models.CharField(max_length=255, null=True, blank=True)
+    updated_on = models.DateTimeField(null=True, blank=True)
+    lost_reason_id = models.CharField(max_length=255, null=True, blank=True)
+    lost_reason_name = models.CharField(max_length=255, null=True, blank=True)
+    followers = models.TextField(null=True, blank=True)
+    notes = models.TextField(null=True, blank=True)
+    tags = models.CharField(max_length=255, null=True, blank=True)
+    engagement_score = models.IntegerField(null=True, blank=True)
+    status = models.CharField(max_length=50, null=True, blank=True)
     sq_ft = models.CharField(max_length=50, null=True, blank=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    opportunity_id = models.CharField(max_length=255, null=True, blank=True)
+    pipeline_stage_id = models.CharField(max_length=255, null=True, blank=True)
+    pipeline_id = models.CharField(max_length=255, null=True, blank=True)
+    days_since_last_stage_change = models.CharField(max_length=50, null=True, blank=True)
+    days_since_last_status_change = models.CharField(max_length=50, null=True, blank=True)
+    days_since_last_updated = models.CharField(max_length=50, null=True, blank=True)
 
     def __str__(self):
         return self.full_name or "Unnamed Opportunity"
+
     
 
 class Budget(models.Model):
@@ -195,3 +205,70 @@ class Budget(models.Model):
         return f"Budget for {self.location_name or 'Unknown Location'}"
 
 
+
+class Contact(models.Model):
+    contact_id = models.CharField(max_length=50, unique=True)
+    first_name = models.CharField(max_length=255, blank=True, null=True)
+    last_name = models.CharField(max_length=255, blank=True, null=True)
+    business_name = models.CharField(max_length=255, blank=True, null=True)
+    company_name = models.CharField(max_length=255, blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    created = models.DateTimeField(blank=True, null=True)
+    tags = models.TextField(blank=True, null=True)
+    utm_source = models.CharField(max_length=255, blank=True, null=True)
+    utm_medium = models.CharField(max_length=255, blank=True, null=True)
+    utm_campaign = models.CharField(max_length=255, blank=True, null=True)
+    utm_content = models.CharField(max_length=255, blank=True, null=True)
+    utm_term = models.CharField(max_length=255, blank=True, null=True)
+    utm_traffic_type = models.CharField(max_length=255, blank=True, null=True)
+
+    def __str__(self):
+        return self.first_name if self.first_name else "Unnamed Contact"
+
+
+
+class GoogleCampaignTotal(models.Model):
+    all_conversions = models.FloatField(null=True, blank=True)
+    avg_cpc = models.FloatField(null=True, blank=True)
+    clicks = models.IntegerField(null=True, blank=True)
+    date = models.DateField()
+    conversion_rate = models.FloatField(null=True, blank=True)
+    conversions = models.IntegerField(null=True, blank=True)
+    cost = models.FloatField(null=True, blank=True)
+    cost_per_conversion = models.FloatField(null=True, blank=True)
+    impressions = models.IntegerField(null=True, blank=True)
+    interactions = models.IntegerField(null=True, blank=True)
+    view_through_conversions = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'googlecampaigntotal'
+    
+    def __str__(self):
+        return f"Campaign Total - Clicks: {self.clicks}, Conversions: {self.conversions}"
+    
+
+
+class UserAppointment(models.Model):
+    appointment_id = models.CharField(max_length=50)
+    contact_name = models.CharField(max_length=255, null=True, blank=True)
+    appointment_status = models.CharField(max_length=50, null=True, blank=True)
+    title = models.CharField(max_length=255, null=True, blank=True)
+    start_time = models.CharField(max_length=50, null=True, blank=True)
+    date_added = models.CharField(max_length=50, null=True, blank=True)
+    calendar_name = models.CharField(max_length=255, null=True, blank=True)
+    assigned_to = models.CharField(max_length=255, null=True, blank=True)
+    contact_id = models.CharField(max_length=50, null=True, blank=True)
+    sort = models.JSONField(null=True, blank=True)
+    source = models.CharField(max_length=100, null=True, blank=True)
+    created_by = models.CharField(max_length=100, null=True, blank=True)
+    mode = models.CharField(max_length=50, null=True, blank=True)
+    phone = models.CharField(max_length=20, null=True, blank=True)
+    email = models.EmailField(max_length=255, null=True, blank=True)
+    appointment_owner = models.CharField(max_length=255, null=True, blank=True)
+
+    class Meta:
+        db_table = 'userappointment'
+
+    def __str__(self):
+        return f"{self.contact_name} - {self.title}"

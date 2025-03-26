@@ -1,7 +1,7 @@
 import requests
 from decouple import config
 from accounts.serializers import FirebaseTokenSerializer, LeadConnectorAuthSerializer, IdentityToolkitAuthSerializer
-from accounts.models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, CallReport, FacebookCampaign, Appointment, GoogleCampaign
+from accounts.models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, CallReport, FacebookCampaign, Appointment, GoogleCampaignTotal
 
 
 def token_generation_step1():
@@ -388,49 +388,81 @@ def fetch_campaigns_facebook():
 
 
 
-
-
-
-def fetch_latest_appointments(retry_count=0):
-    from datetime import datetime, timedelta
-    import time
-
-    MAX_RETRIES = 1
-
-
-    """
-    Fetches all appointments for the past year by handling pagination
-    and saves them to the database.
-    """
-    # API endpoint
-
-    token = IdentityToolkitAuth.objects.first()
-    if not token:
-        token_generation_step1()
-        fetch_latest_appointments()
-        return
-    url = "https://backend.leadconnectorhq.com/reporting/dashboards/automations/appointments"
-
+def fetch_and_store_google_campaigns():
+    url = "https://python-backend-dot-highlevel-backend.appspot.com/1.1/reporting/g/Xtj525Qgufukym5vtwbZ/campaigns"
     headers = {
-        "Token-id": f"{token.id_token}",
-        "Content-Type": "application/json",
+        "Authorization": "Bearer 59b0a2e7-bea0-4880-9bb0-c1aaffc67600",
         "Accept": "application/json",
-        "Source": "WEB_USER",
-        "Channel": "APP",
-        "Version": "2021-04-15"
     }
+    import datetime
+    today = datetime.date.today()
+    yesterday = today - datetime.timedelta(days=1)
+
+    for current_date in [yesterday, today]:
+        params = {"start": current_date, "end": current_date, "sample": "false"}
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code == 200:
+            data = response.json().get("total", {})
+            if not data:
+                print(f"No campaign data found for {current_date}")
+                continue
+
+            # Check if data for yesterday already exists
+            
+            obj, created = GoogleCampaignTotal.objects.update_or_create(
+                date=current_date,
+                defaults={
+                    "all_conversions": data.get('allConversions', 0),
+                    "avg_cpc": data.get('avgCpc', 0),
+                    "clicks": data.get('clicks', 0),
+                    "conversion_rate": data.get('conversionRate', 0),
+                    "conversions": data.get('conversions', 0),
+                    "cost": data.get('cost', 0),
+                    "cost_per_conversion": data.get('costPerConversion', 0),
+                    "impressions": data.get('impressions', 0),
+                    "interactions": data.get('interactions', 0),
+                    "view_through_conversions": data.get('viewThroughConversions', 0),
+                }
+            )
+            print("obj:", obj)
+            print("created: ", created)
+            print("Google Campaign Data Stored Successfully for", current_date)
+        else:
+            print(f"Error: {response.status_code} - {response.text}")
+
+    print("Last days data fetched & stored successfully!")
+    return 
+
+
+
+
+import requests
+from datetime import datetime, timedelta
+import pytz
+
+def fetch_ghl_appointments(
+    access_token, 
+    location_id, 
+    start_date, 
+    end_date, 
+    page=1, 
+    limit=50, 
+    timezone_str='America/Edmonton'
+):
+    """
+    Fetch appointments from GoHighLevel for a specific date range.
+    """
+    # Set timezone
+    timezone = pytz.timezone(timezone_str)
     
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=1)
-    
-    # Convert to millisecond timestamps
-    start_timestamp = int(start_date.timestamp() * 1000)
-    end_timestamp = int(end_date.timestamp() * 1000)
-    
-    params = {
-        "locationId": "Xtj525Qgufukym5vtwbZ"
-    }
-    
+    # Convert dates to milliseconds for GHL API
+    start_ms = int(start_date.timestamp() * 1000)
+    end_ms = int(end_date.timestamp() * 1000)
+
+    print("start ms :",start_ms)
+    print("end ms: ", end_ms)
+
     columns = [
         {"title": "Name of contact", "key": "contactName", "isSelected": True, "isSortable": False, "isArray": False},
         {"title": "Status", "key": "appointmentStatus", "isSelected": True, "isSortable": False, "isArray": False},
@@ -442,14 +474,8 @@ def fetch_latest_appointments(retry_count=0):
         {"title": "Mode", "key": "reportingSource", "isSelected": True, "isSortable": False, "isArray": False}
     ]
     
-    total_appointments = 0
-    total_pages = 0
-    
-    current_page = 1
-    has_more_data = True
-    
-    while has_more_data:
-        payload = {
+    # Prepare payload
+    payload = {
             "chartType": "table",
             "options": {
                 "aggregations": {
@@ -461,7 +487,7 @@ def fetch_latest_appointments(retry_count=0):
                         {
                             "field": "dateAdded",
                             "operator": "time_series",
-                            "value": [start_timestamp, end_timestamp]
+                            "value": [start_ms, end_ms]
                         }
                     ]
                 },
@@ -470,165 +496,132 @@ def fetch_latest_appointments(retry_count=0):
                     "order": "desc",
                     "orderBy": "dateAdded",
                     "limit": 50,
-                    "page": current_page
+                    "page": 1
                 },
                 "timezone": "America/Edmonton"
             }
         }
-        
-        try:
-            response = requests.post(url, params=params, headers=headers, json=payload)
-            if response.status_code == 201 or response.status_code == 200:
-                data = response.json()
-                
-                if 'data' in data:
-                    appointments = data['data']
-                    appointments_count = len(appointments)
-                    
-                    if appointments_count == 0:
-                        has_more_data = False
-                    else:
-                        save_appointments_from_api_data(appointments)
-                        
-                        total_appointments += appointments_count
-                        total_pages += 1
-                        
-                        current_page += 1
-                        
-                        time.sleep(0.5)
-                else:
-                    has_more_data = False
-            elif response.status_code == 401:
-                if retry_count < MAX_RETRIES:
-                        print(f"401 Unauthorized. Retrying... (Attempt {retry_count + 1})")
-                        if token_generation_step1():
-                            fetch_latest_appointments(retry_count + 1)
-                            return
-
-            else:
-                # Request failed
-                print(f"Request failed with status code: {response.status_code}")
-                print(f"Response: {response.text}")
-                has_more_data = False
-                
-        except Exception as e:
-            print(f"Error fetching appointments data: {str(e)}")
-            has_more_data = False
     
-    return {
-        "total_appointments": total_appointments,
-        "total_pages": total_pages
-    }
-
-def save_appointments_from_api_data(data):
-
-    from datetime import datetime
-
-    for item in data:
-        # Parse the timestamp from the sort field
-        sort_timestamp = item['sort'][0] if 'sort' in item and len(item['sort']) > 0 else None
-        sort_id = item['sort'][1] if 'sort' in item and len(item['sort']) > 1 else None
-        
-        try:
-            from django.utils.timezone import make_aware
-
-            start_time = make_aware(datetime.strptime(item.get('startTime', ''), '%b %d %Y %I:%M %p')) if item.get('startTime') else None
-            date_added = make_aware(datetime.strptime(item.get('dateAdded', ''), '%b %d %Y %I:%M %p')) if item.get('dateAdded') else None
-
-            
-            Appointment.objects.update_or_create(
-                id=item['id'],
-                defaults={
-                    'contact_name': item.get('contactName', ''),
-                    'appointment_status': item.get('appointmentStatus', ''),
-                    'title': item.get('title', ''),
-                    'start_time': start_time,
-                    'date_added': date_added,
-                    'calendar_name': item.get('calendarName', ''),
-                    'assigned_to': item.get('assignedTo', ''),
-                    'contact_id': item.get('contactId', ''),
-                    'sort_timestamp': sort_timestamp,
-                    'sort_id': sort_id,
-                    'source': item.get('source', ''),
-                    'created_by': item.get('createdBy', ''),
-                    'mode': item.get('mode', '') or item.get('reportingSource', ''),
-                    'phone': item.get('phone', ''),
-                    'email': item.get('email', ''),
-                    'appointment_owner': item.get('appointmentOwner', '') or item.get('assignedTo', '')
-                }
-            )
-        except Exception as e:
-            print(f"Error saving appointment {item.get('id', 'unknown')}: {str(e)}")
-            continue
-    print("appointments created successfully")
-
-
-
-
-
-
-def scheduled_appointment_sync():
-    """
-    Function to be scheduled daily to sync appointment data
-    """
-    try:
-        result = fetch_latest_appointments()
-        print(f"Successfully fetched {result['total_appointments']} appointments from {result['total_pages']} pages")
-        return True
-    except Exception as e:
-        print(f"Error in scheduled appointment sync: {str(e)}")
-        return False
-    
-
-
-
-
-
-def fetch_and_store_google_campaigns():
-    url = "https://python-backend-dot-highlevel-backend.appspot.com/1.1/reporting/g/Xtj525Qgufukym5vtwbZ/campaigns"
+    # Prepare headers
     headers = {
-        "Authorization": "Bearer 59b0a2e7-bea0-4880-9bb0-c1aaffc67600",
+        "Token-id": f"{access_token}",
+        "Content-Type": "application/json",
         "Accept": "application/json",
+        "Source": "WEB_USER",
+        "Channel": "APP",
+        "Version": "2021-04-15"
     }
-    import datetime
-    today = datetime.date.today()
-    start_date = today - datetime.timedelta(days=1)
+    
+    # Make the API request
+    try:
+        response = requests.post(
+            f'https://backend.leadconnectorhq.com/reporting/dashboards/automations/appointments?locationId={location_id}',
+            json=payload,
+            headers=headers
+        )
 
-    for i in range(2):
-        print(i)
-        current_date = start_date + datetime.timedelta(days=i)
-        formatted_date = current_date.strftime("%Y-%m-%d")
-
-        params = {"start": formatted_date, "end": formatted_date, "sample": "false"}
-        response = requests.get(url, headers=headers, params=params)
-
-        if response.status_code == 200:
-            data = response.json()
-            for campaign_data in data.get("campaigns", []):
-                campaign = campaign_data["campaign"]
-                metrics = campaign_data["metrics"]
-
-                GoogleCampaign.objects.update_or_create(
-                    campaign_id=campaign["id"],
-                    date=current_date,
-                    defaults={
-                        "campaign_name": campaign["name"],
-                        "currency_code": campaign_data["customer"]["currencyCode"],
-                        "status": campaign["status"],
-                        "impressions": int(metrics["impressions"]),
-                        "clicks": int(metrics.get("clicks",0)),
-                        "interactions": int(metrics.get("interactions",0)),
-                        "conversions": float(metrics.get("conversions",0)),
-                        "cost_micros": int(metrics.get("costMicros",0)),
-                        "cost_per_conversion": float(metrics.get("costPerConversion", 0)),
-                        "ctr": float(metrics.get("ctr",0)),
-                        "avg_cpc": float(metrics.get("averageCpc",0)),
-                        "conversion_rate": float(metrics.get("conversionsFromInteractionsRate",0)),
-                        "view_through_conversions": int(metrics.get("viewThroughConversions",0)),
-                    }
-                )
-            print("google campaigns data created")
+        # print("response:", response.json())
+        
+        # Raise an exception for bad responses
+        response.raise_for_status()
+        
+        # Return the response JSON
+        return response.json()
+    
+    except requests.RequestException as e:
+        print(f"Error fetching appointments: {e}")
+        return None
+    
 
 
-    print("Last days data fetched & stored successfully!")
-    return 
+
+
+
+
+# Utility to demonstrate usage (remove in actual implementation)
+def appoinment_fetch_usage():
+    token_generation_step1()
+    token = IdentityToolkitAuth.objects.first()
+    ACCESS_TOKEN = token.id_token
+    LOCATION_ID = 'Xtj525Qgufukym5vtwbZ'
+                            
+    print('tokenL', ACCESS_TOKEN)
+    # Fetch today's appointments
+    today_appointments = get_last_days_appointments(ACCESS_TOKEN, LOCATION_ID)
+    print("today appoinment:", today_appointments)
+
+    
+def get_last_days_appointments(access_token, location_id):
+    """
+    Fetch appointments for the last 365 days, day by day.
+    """
+    # timezone = pytz.timezone('America/Edmonton')
+    all_appointments = []
+
+    timezone = datetime.now().astimezone().tzinfo
+    
+    # Get yesterday's date
+    yesterday = datetime.now(timezone).date() - timedelta(days=1)
+    
+    # Create start of yesterday (00:00:00)
+    start_date = datetime.combine(yesterday, datetime.min.time()).replace(tzinfo=timezone)
+    
+    # Create end of yesterday (23:59:59)
+    end_date = datetime.combine(yesterday, datetime.max.time()).replace(tzinfo=timezone)
+    
+    print(f"Fetching data for: {yesterday}")
+    print(f"Start date: {start_date}")
+    print(f"End date: {end_date}")
+    
+    # Fetch appointments for yesterday
+    daily_appointments = fetch_ghl_appointments(access_token, location_id, start_date, end_date)
+    # print("Daily appointments: ", daily_appointments)
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%b %d %Y")
+
+    # Filter data based on yesterday's dateAdded
+    filtered_data = [entry for entry in daily_appointments["data"] if entry["dateAdded"].startswith(yesterday)]
+    print("filtered data", filtered_data)
+    if daily_appointments:
+        save_appointments_to_db(filtered_data)
+        return daily_appointments.get("data", [])
+
+    return []
+
+from django.db import transaction
+from accounts.models import UserAppointment
+def save_appointments_to_db(appointments):
+    """
+    Save all fetched appointments to the database without updating existing ones.
+    """
+    if not appointments:
+        print("No appointments to save.")
+        return
+
+    new_appointments = []
+
+    for appointment in appointments:
+        new_appointments.append(
+            UserAppointment(
+                appointment_id = appointment.get("id"),
+                contact_name=appointment.get("contactName"),
+                appointment_status=appointment.get("appointmentStatus"),
+                title=appointment.get("title"),
+                start_time=appointment.get("startTime"),
+                date_added=appointment.get("dateAdded"),
+                calendar_name=appointment.get("calendarName"),
+                assigned_to=appointment.get("assignedTo"),
+                contact_id=appointment.get("contactId"),
+                sort=appointment.get("sort"),
+                source=appointment.get("source"),
+                created_by=appointment.get("createdBy"),
+                mode=appointment.get("mode"),
+                phone=appointment.get("phone"),
+                email=appointment.get("email"),
+                appointment_owner=appointment.get("appointmentOwner"),
+            )
+        )
+
+    with transaction.atomic():  # Ensures all records are inserted together
+        UserAppointment.objects.bulk_create(new_appointments)
+
+    print(f"Inserted {len(new_appointments)} new appointments into the database.")
