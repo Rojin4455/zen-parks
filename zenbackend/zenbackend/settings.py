@@ -170,4 +170,8 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'accounts.tasks.make_api_call',
         'schedule': timedelta(hours=24),
     },
+    'make-api-for-ghl': {
+        'task': 'accounts.tasks.make_api_for_ghl',
+        'schedule': crontab(hour='*/20'),
+    }
 }
