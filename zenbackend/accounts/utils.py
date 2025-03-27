@@ -1,7 +1,7 @@
 import requests
 from decouple import config
 from accounts.serializers import FirebaseTokenSerializer, LeadConnectorAuthSerializer, IdentityToolkitAuthSerializer
-from accounts.models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, CallReport, FacebookCampaign, Appointment, GoogleCampaignTotal
+from accounts.models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, CallReport, FacebookCampaign, Appointment, GoogleCampaignTotal, GHLAuthCredentials, Opportunity
 
 
 def token_generation_step1():
@@ -625,3 +625,86 @@ def save_appointments_to_db(appointments):
         UserAppointment.objects.bulk_create(new_appointments)
 
     print(f"Inserted {len(new_appointments)} new appointments into the database.")
+
+
+
+def fetch_opportunities():
+    # Calculate yesterday's date in the format MM-DD-YYYY
+    token = GHLAuthCredentials.objects.first()
+    yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%m-%d-%Y")
+
+    url = f"https://services.leadconnectorhq.com/opportunities/search?location_id=Xtj525Qgufukym5vtwbZ&date={yesterday}"
+
+    # Authorization Token (Ensure it's valid)
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token.access_token}",
+        "Version": "2021-07-28"
+    }
+
+    print("date: ", yesterday)
+    # Make the GET request
+    response = requests.get(url, headers=headers)
+
+    # Check response status
+    if response.status_code == 200:
+        data = response.json()
+        opportunities = data.get("opportunities", [])
+        print("len(; ):", len(opportunities))
+
+        for opp in opportunities:
+            opportunity_id = opp.get("id")
+            created_at = opp.get("createdAt")
+            updated_at = opp.get("updatedAt")
+            
+            # Convert timestamps to datetime format
+            date_created = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%S.%fZ") if created_at else None
+            updated_on = datetime.strptime(updated_at, "%Y-%m-%dT%H:%M:%S.%fZ") if updated_at else None
+            
+            # Extract related contact details
+            contact = opp.get("contact", {})
+
+            # Extract fields
+            defaults = {
+                "contact_id": opp.get("contactId"),
+                "date_created": date_created,
+                "email": contact.get("email"),
+                "full_name": contact.get("name"),
+                "opportunity_name": opp.get("name"),
+                "phone": contact.get("phone"),
+                "pipeline_name": None,
+                "pipeline_stage": opp.get("pipelineStageId"),
+                "lead_value": opp.get("monetaryValue"),
+                "source": opp.get("source"),
+                "assigned": opp.get("assignedTo"),
+                "updated_on": updated_on,
+                "lost_reason_id": opp.get("lostReasonId"),
+                "followers": str(opp.get("followers", [])),
+                "tags": str(contact.get("tags", [])),
+                "engagement_score": 0,  # Engagement score not in JSON, adjust if available
+                "status": opp.get("status"),
+                "sq_ft": None,  # Not available in JSON
+                "pipeline_stage_id": opp.get("pipelineStageId"),
+                "pipeline_id": opp.get("pipelineId"),
+                "days_since_last_stage_change": None,
+                "days_since_last_status_change": None,  # Not available in JSON
+                "days_since_last_updated": None  # Not available in JSON
+            }
+
+            obj, created = Opportunity.objects.update_or_create(
+                opportunity_id=opportunity_id,
+                defaults=defaults
+            )
+
+            if created:
+                print(f"Created new opportunity: {opportunity_id}")
+            else:
+                print(f"Updated existing opportunity: {opportunity_id}")
+
+        #     return response.json()
+    else:
+        return {"error": f"Failed to fetch data: {response.status_code}, {response.text}"}
+
+# Example usage:
+# opportunities = fetch_opportunities()
+# print(opportunities)
