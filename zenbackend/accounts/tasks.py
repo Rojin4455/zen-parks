@@ -3,7 +3,7 @@ import requests
 from celery import shared_task
 from accounts.models import GHLAuthCredentials
 from decouple import config
-from accounts.utils import fetch_and_store_google_campaigns, fetch_campaigns_facebook, fetch_calls_for_last_days,appoinment_fetch_usage,fetch_opportunities
+from accounts.utils import fetch_and_store_google_campaigns, fetch_campaigns_facebook, fetch_calls_for_last_days,appoinment_fetch_usage,fetch_opportunities, fetch_contacts
 
 @shared_task
 def make_api_call():
@@ -13,6 +13,7 @@ def make_api_call():
     appoinment_fetch_usage()
     fetch_campaigns_facebook()
     fetch_calls_for_last_days()
+    fetch_contacts()
     return
     
 

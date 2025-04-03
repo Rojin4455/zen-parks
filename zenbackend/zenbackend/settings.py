@@ -166,12 +166,12 @@ CELERY_TIMEZONE = 'UTC'
 
 
 CELERY_BEAT_SCHEDULE = {
-    'make-api-call-every-minute': {
+    'make-api-call-every-day': {
         'task': 'accounts.tasks.make_api_call',
         'schedule': timedelta(hours=24),
     },
     'make-api-for-ghl': {
         'task': 'accounts.tasks.make_api_for_ghl',
-        'schedule': crontab(hour='*/20'),
+        'schedule': crontab(hour='*/20', minute=0),
     }
 }

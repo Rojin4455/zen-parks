@@ -1,7 +1,7 @@
 import requests
 from decouple import config
 from accounts.serializers import FirebaseTokenSerializer, LeadConnectorAuthSerializer, IdentityToolkitAuthSerializer
-from accounts.models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, CallReport, FacebookCampaign, Appointment, GoogleCampaignTotal, GHLAuthCredentials, Opportunity
+from accounts.models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, CallReport, FacebookCampaign, Appointment, GoogleCampaignTotal, GHLAuthCredentials, Opportunity, Contact
 
 
 def token_generation_step1():
@@ -184,19 +184,18 @@ def fetch_calls_for_last_days(retry_count=0):
 
     MAX_RETRIES = 1
     # Get authentication token
+    print("Error: No valid authentication token found.")
+    token_generation_step1()
     token = IdentityToolkitAuth.objects.first()
-    if not token:
-        print("Error: No valid authentication token found.")
-        token_generation_step1()
-        fetch_calls_for_last_days()
-        return
 
     # Get today's date in UTC
 
+    import datetime
+    import pytz
+    
     utc_now = datetime.datetime.utcnow().replace(tzinfo=pytz.UTC)
-
     # Fetch data for today and yesterday only
-    for i in range(0,2):
+    for i in range(3):
         start_date = (utc_now - datetime.timedelta(days=i + 1)).isoformat()
         end_date = (utc_now - datetime.timedelta(days=i)).isoformat()
 
@@ -244,12 +243,7 @@ def fetch_calls_for_last_days(retry_count=0):
                 print(f"Error: {response.status_code}, {response.text}")
                 break
                 
-            elif response.status_code == 401:
-                if retry_count < MAX_RETRIES:
-                        print(f"401 Unauthorized. Retrying... (Attempt {retry_count + 1})")
-                        if token_generation_step1():
-                            fetch_calls_for_last_days(retry_count + 1)
-                            return
+
 
             data = response.json()
             print("data: ", response.json())
@@ -271,9 +265,13 @@ def update_or_store_calls(calls):
 
     call_objects = []
 
+    existing_call_ids = set(CallReport.objects.filter(id__in=[call.get("id") for call in calls]).values_list("id", flat=True))
+
+    new_call_objects = []
+    update_call_objects = []
+
     for call in calls:
-        
-        call_objects.append(CallReport(
+        call_obj = CallReport(
             id=call.get("id"),
             account_sid=call.get("accountSid"),
             assigned_to=call.get("assignedTo"),
@@ -310,12 +308,31 @@ def update_or_store_calls(calls):
             updated_at=parse_datetime(call.get("updatedAt")) if call.get("updatedAt") else None,
             duration=call.get("duration", 0),
             first_time=call.get("firstTime", False),
-            recording_url=call.get("recordingUrl")
-        ))
+            recording_url=call.get("recordingUrl"),
+        )
 
+        if call.get("id") in existing_call_ids:
+            update_call_objects.append(call_obj)  # Update existing calls
+        else:
+            new_call_objects.append(call_obj)  # Insert new calls
 
-    CallReport.objects.bulk_create(call_objects, ignore_conflicts=True)
-    print(f"Stored {len(call_objects)} call records in the database.")
+        # Perform bulk operations
+    with transaction.atomic():
+        if new_call_objects:
+            CallReport.objects.bulk_create(new_call_objects, ignore_conflicts=True)
+            print(f"Inserted {len(new_call_objects)} new call records.")
+
+        if update_call_objects:
+            CallReport.objects.bulk_update(update_call_objects, [
+                "account_sid", "assigned_to", "call_sid", "call_status", "called", "called_city",
+                "called_country", "called_state", "called_zip", "caller", "caller_city",
+                "caller_country", "caller_state", "caller_zip", "contact_id", "date_added",
+                "date_updated", "deleted", "direction", "from_number", "from_city", "from_country",
+                "from_state", "from_zip", "location_id", "message_id", "to_number", "to_city",
+                "to_country", "to_state", "to_zip", "user_id", "updated_at", "duration",
+                "first_time", "recording_url"
+            ])
+            print(f"Updated {len(update_call_objects)} existing call records.")
 
 
 
@@ -436,6 +453,32 @@ def fetch_and_store_google_campaigns():
 
 
 
+def get_timestamp_range(date_str):
+    import pytz
+    """
+    Convert a date string like '2025-03-04' to start and end timestamps in ms
+    matching the website's behavior (Mountain Time).
+    """
+    # Parse the date string
+    # year, month, day = map(int, date_str.split('-'))
+    date_obj = date_str.date()
+    
+    # Set up Mountain Time timezone
+    mountain_tz = pytz.timezone('America/Edmonton')
+    
+    # Create start of day in Mountain Time
+    start_date = mountain_tz.localize(datetime.combine(date_obj, datetime.min.time()))
+    
+    # Create end of day in Mountain Time
+    end_date = mountain_tz.localize(datetime.combine(date_obj, datetime.max.time()))
+    
+    # Convert to milliseconds timestamp
+    start_ms = int(start_date.timestamp() * 1000)
+    end_ms = int(end_date.timestamp() * 1000)
+    
+    return start_ms, end_ms
+
+
 
 import requests
 from datetime import datetime, timedelta
@@ -453,15 +496,11 @@ def fetch_ghl_appointments(
     """
     Fetch appointments from GoHighLevel for a specific date range.
     """
-    # Set timezone
-    timezone = pytz.timezone(timezone_str)
-    
-    # Convert dates to milliseconds for GHL API
-    start_ms = int(start_date.timestamp() * 1000)
-    end_ms = int(end_date.timestamp() * 1000)
 
-    print("start ms :",start_ms)
-    print("end ms: ", end_ms)
+    start_ms, end_ms = get_timestamp_range(start_date)
+    print(f"For date {start_date}:")
+    print(f"Start ms: {start_ms}")
+    print(f"End ms: {end_ms}")
 
     columns = [
         {"title": "Name of contact", "key": "contactName", "isSelected": True, "isSortable": False, "isArray": False},
@@ -501,6 +540,8 @@ def fetch_ghl_appointments(
                 "timezone": "America/Edmonton"
             }
         }
+    print("date ddeede: ", start_date)
+    print("value ms: ", start_ms, end_ms)
     
     # Prepare headers
     headers = {
@@ -547,62 +588,86 @@ def appoinment_fetch_usage():
                             
     print('tokenL', ACCESS_TOKEN)
     # Fetch today's appointments
-    today_appointments = get_last_days_appointments(ACCESS_TOKEN, LOCATION_ID)
+    today_appointments = get_appointments_date_range2(ACCESS_TOKEN, LOCATION_ID)
     print("today appoinment:", today_appointments)
 
     
-def get_last_days_appointments(access_token, location_id):
-    """
-    Fetch appointments for the last 365 days, day by day.
-    """
-    # timezone = pytz.timezone('America/Edmonton')
-    all_appointments = []
+# def get_last_days_appointments(access_token, location_id):
+#     """
+#     Fetch appointments for the last 365 days, day by day.
+#     """
+#     # timezone = pytz.timezone('America/Edmonton')
+#     all_appointments = []
 
-    timezone = datetime.now().astimezone().tzinfo
+#     timezone = datetime.now().astimezone().tzinfo
     
-    # Get yesterday's date
-    yesterday = datetime.now(timezone).date() - timedelta(days=1)
+#     # Get yesterday's date
+#     yesterday = datetime.now(timezone).date() - timedelta(days=1)
     
-    # Create start of yesterday (00:00:00)
-    start_date = datetime.combine(yesterday, datetime.min.time()).replace(tzinfo=timezone)
+#     # Create start of yesterday (00:00:00)
+#     start_date = datetime.combine(yesterday, datetime.min.time()).replace(tzinfo=timezone)
     
-    # Create end of yesterday (23:59:59)
-    end_date = datetime.combine(yesterday, datetime.max.time()).replace(tzinfo=timezone)
+#     # Create end of yesterday (23:59:59)
+#     end_date = datetime.combine(yesterday, datetime.max.time()).replace(tzinfo=timezone)
     
-    print(f"Fetching data for: {yesterday}")
-    print(f"Start date: {start_date}")
-    print(f"End date: {end_date}")
+#     print(f"Fetching data for: {yesterday}")
+#     print(f"Start date: {start_date}")
+#     print(f"End date: {end_date}")
     
-    # Fetch appointments for yesterday
-    daily_appointments = fetch_ghl_appointments(access_token, location_id, start_date, end_date)
-    # print("Daily appointments: ", daily_appointments)
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%b %d %Y")
+#     # Fetch appointments for yesterday
+#     daily_appointments = fetch_ghl_appointments(access_token, location_id, start_date, end_date)
+#     # print("Daily appointments: ", daily_appointments)
+#     yesterday = (datetime.now() - timedelta(days=1)).strftime("%b %d %Y")
 
-    # Filter data based on yesterday's dateAdded
-    filtered_data = [entry for entry in daily_appointments["data"] if entry["dateAdded"].startswith(yesterday)]
-    print("filtered data", filtered_data)
-    if daily_appointments:
-        save_appointments_to_db(filtered_data)
-        return daily_appointments.get("data", [])
+#     # Filter data based on yesterday's dateAdded
+#     filtered_data = [entry for entry in daily_appointments["data"] if entry["dateAdded"].startswith(yesterday)]
+#     print("filtered data", filtered_data)
+#     if daily_appointments:
+#         save_appointments_to_db(filtered_data)
+#         return daily_appointments.get("data", [])
 
-    return []
+#     return []
 
 from django.db import transaction
 from accounts.models import UserAppointment
 def save_appointments_to_db(appointments):
-    """
-    Save all fetched appointments to the database without updating existing ones.
-    """
     if not appointments:
         print("No appointments to save.")
         return
 
+    appointment_ids = [appointment["id"] for appointment in appointments]
+    
+    # Fetch existing appointments in bulk
+    existing_appointments = {ua.appointment_id: ua for ua in UserAppointment.objects.filter(appointment_id__in=appointment_ids)}
+
     new_appointments = []
+    updated_appointments = []
 
     for appointment in appointments:
-        new_appointments.append(
-            UserAppointment(
-                appointment_id = appointment.get("id"),
+        obj = existing_appointments.get(appointment["id"])
+
+        if obj:
+            # Update existing appointment fields
+            obj.contact_name = appointment.get("contactName")
+            obj.appointment_status = appointment.get("appointmentStatus")
+            obj.title = appointment.get("title")
+            obj.start_time = appointment.get("startTime")
+            obj.date_added = appointment.get("dateAdded")
+            obj.calendar_name = appointment.get("calendarName")
+            obj.assigned_to = appointment.get("assignedTo")
+            obj.contact_id = appointment.get("contactId")
+            obj.sort = appointment.get("sort")
+            obj.source = appointment.get("source")
+            obj.created_by = appointment.get("createdBy")
+            obj.mode = appointment.get("mode")
+            obj.phone = appointment.get("phone")
+            obj.email = appointment.get("email")
+            obj.appointment_owner = appointment.get("appointmentOwner")
+            updated_appointments.append(obj)
+        else:
+            # Create new appointment object
+            new_appointments.append(UserAppointment(
+                appointment_id=appointment.get("id"),
                 contact_name=appointment.get("contactName"),
                 appointment_status=appointment.get("appointmentStatus"),
                 title=appointment.get("title"),
@@ -618,93 +683,462 @@ def save_appointments_to_db(appointments):
                 phone=appointment.get("phone"),
                 email=appointment.get("email"),
                 appointment_owner=appointment.get("appointmentOwner"),
-            )
-        )
+            ))
 
-    with transaction.atomic():  # Ensures all records are inserted together
-        UserAppointment.objects.bulk_create(new_appointments)
+    with transaction.atomic():
+        # Bulk create new appointments
+        if new_appointments:
+            UserAppointment.objects.bulk_create(new_appointments, batch_size=1000)
+        
+        # Bulk update existing appointments
+        if updated_appointments:
+            UserAppointment.objects.bulk_update(updated_appointments, [
+                "contact_name", "appointment_status", "title", "start_time", "date_added",
+                "calendar_name", "assigned_to", "contact_id", "sort", "source",
+                "created_by", "mode", "phone", "email", "appointment_owner"
+            ], batch_size=1000)
 
-    print(f"Inserted {len(new_appointments)} new appointments into the database.")
+    print(f"Inserted {len(new_appointments)} new appointments, updated {len(updated_appointments)} existing appointments.")
 
 
+def fetch_opportunities(limit=100):
+    from datetime import datetime, timedelta
+    end_date = datetime.today().strftime("%m-%d-%Y")
 
-def fetch_opportunities():
-    # Calculate yesterday's date in the format MM-DD-YYYY
+    # Get the date 30 days ago
+    start_date = (datetime.today() - timedelta(days=30)).strftime("%m-%d-%Y")
+    print("start date: _ ", start_date)
+    print("end date: ", end_date)
+    location_id = "Xtj525Qgufukym5vtwbZ"
     token = GHLAuthCredentials.objects.first()
-    yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%m-%d-%Y")
 
-    url = f"https://services.leadconnectorhq.com/opportunities/search?location_id=Xtj525Qgufukym5vtwbZ&date={yesterday}"
+    if not token:
+        print("Error: No authentication token found.")
+        return None
 
-    # Authorization Token (Ensure it's valid)
+    url = "https://services.leadconnectorhq.com/opportunities/search"
     headers = {
         "Accept": "application/json",
         "Authorization": f"Bearer {token.access_token}",
         "Version": "2021-07-28"
     }
+    page = 1
+    all_opportunities = []
+    offset = 0  # Start from the first page
 
-    print("date: ", yesterday)
-    # Make the GET request
-    response = requests.get(url, headers=headers)
+    while True:
+        params = {
+            "location_id": location_id,
+            "status": "all",
+            "order": "added_desc",
+            "date": start_date,
+            "endDate": end_date,
+            "limit": limit,
+            "page": page
+        }
 
-    # Check response status
-    if response.status_code == 200:
+        response = requests.get(url, headers=headers, params=params)
+
+        if response.status_code != 200:
+            print(f"Error: {response.status_code} - {response.text}")
+            break  # Stop the loop if there's an error
+
         data = response.json()
         opportunities = data.get("opportunities", [])
-        print("len(; ):", len(opportunities))
 
-        for opp in opportunities:
-            opportunity_id = opp.get("id")
-            created_at = opp.get("createdAt")
-            updated_at = opp.get("updatedAt")
-            
-            # Convert timestamps to datetime format
-            date_created = datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%S.%fZ") if created_at else None
-            updated_on = datetime.strptime(updated_at, "%Y-%m-%dT%H:%M:%S.%fZ") if updated_at else None
-            
-            # Extract related contact details
-            contact = opp.get("contact", {})
+        if not opportunities:
+            break  # Stop when no more opportunities are returned
 
-            # Extract fields
-            defaults = {
-                "contact_id": opp.get("contactId"),
-                "date_created": date_created,
-                "email": contact.get("email"),
-                "full_name": contact.get("name"),
-                "opportunity_name": opp.get("name"),
-                "phone": contact.get("phone"),
-                "pipeline_name": None,
-                "pipeline_stage": opp.get("pipelineStageId"),
-                "lead_value": opp.get("monetaryValue"),
-                "source": opp.get("source"),
-                "assigned": opp.get("assignedTo"),
-                "updated_on": updated_on,
-                "lost_reason_id": opp.get("lostReasonId"),
-                "followers": str(opp.get("followers", [])),
-                "tags": str(contact.get("tags", [])),
-                "engagement_score": 0,  # Engagement score not in JSON, adjust if available
-                "status": opp.get("status"),
-                "sq_ft": None,  # Not available in JSON
-                "pipeline_stage_id": opp.get("pipelineStageId"),
-                "pipeline_id": opp.get("pipelineId"),
-                "days_since_last_stage_change": None,
-                "days_since_last_status_change": None,  # Not available in JSON
-                "days_since_last_updated": None  # Not available in JSON
+        all_opportunities.extend(opportunities)
+        page += 1
+
+        print(f"Fetched {len(opportunities)} opportunities, total so far: {len(all_opportunities)}")
+
+    print(f"Total opportunities fetched: {len(all_opportunities)}")
+    create_or_update_opportunity(all_opportunities)
+    return
+
+
+
+
+
+def create_or_update_opportunity(opportunity_data):
+    existing_opportunities = {
+        opp.opportunity_id: opp for opp in Opportunity.objects.filter(
+            opportunity_id__in=[data.get("id") for data in opportunity_data]
+        )
+    }
+
+    new_opportunities = []
+    updated_opportunities = []
+
+    for data in opportunity_data:
+        opportunity_id = data.get("id")
+        opportunity = existing_opportunities.get(opportunity_id)
+
+        opportunity_data_dict = {
+            "opportunity_id": opportunity_id,
+            "full_name": data.get("name"),
+            "lead_value": data.get("monetaryValue"),
+            "pipeline_id": data.get("pipelineId"),
+            "pipeline_stage_id": data.get("pipelineStageId"),
+            "assigned": data.get("assignedTo"),
+            "status": data.get("status"),
+            "source": data.get("source"),
+            "days_since_last_status_change": data.get("lastStatusChangeAt"),
+            "days_since_last_stage_change": data.get("lastStageChangeAt"),
+            "date_created": parse_datetime(data.get("createdAt")),
+            "updated_on": parse_datetime(data.get("updatedAt")),
+            "contact_id": data.get("contactId"),
+            "lost_reason_id": data.get("lostReasonId"),
+            "followers": ", ".join(data.get("followers", [])),
+            "email": data.get("contact", {}).get("email"),
+            "phone": data.get("contact", {}).get("phone"),
+            "tags": ", ".join(data.get("contact", {}).get("tags", [])),
+        }
+
+        if opportunity:
+            # Update existing record
+            for field, value in opportunity_data_dict.items():
+                setattr(opportunity, field, value)
+            updated_opportunities.append(opportunity)
+        else:
+            # Create new record
+            new_opportunities.append(Opportunity(**opportunity_data_dict))
+
+    # Bulk insert new records
+    if new_opportunities:
+        Opportunity.objects.bulk_create(new_opportunities)
+        print(f"Created {len(new_opportunities)} new opportunities.")
+
+    # Bulk update existing records
+    if updated_opportunities:
+        Opportunity.objects.bulk_update(
+            updated_opportunities, 
+            [
+                "full_name", "lead_value", "pipeline_id", "pipeline_stage_id", "assigned", 
+                "status", "source", "days_since_last_status_change", "days_since_last_stage_change", 
+                "date_created", "updated_on", "contact_id", "lost_reason_id", "followers", 
+                "email", "phone", "tags"
+            ]
+        )
+        print(f"Updated {len(updated_opportunities)} existing opportunities.")
+
+
+
+
+def make_api_for_ghl():
+    
+    credentials = GHLAuthCredentials.objects.first()
+    
+    print("credentials tokenL", credentials)
+    refresh_token = credentials.refresh_token
+
+    
+    response = requests.post('https://services.leadconnectorhq.com/oauth/token', data={
+        'grant_type': 'refresh_token',
+        'client_id': config("GHL_CLIENT_ID"),
+        'client_secret': config("GHL_CLIENT_SECRET"),
+        'refresh_token': refresh_token
+    })
+    
+    new_tokens = response.json()
+    print("newtoken :", new_tokens)
+
+    obj, created = GHLAuthCredentials.objects.update_or_create(
+            location_id= new_tokens.get("locationId"),
+            defaults={
+                "access_token": new_tokens.get("access_token"),
+                "refresh_token": new_tokens.get("refresh_token"),
+                "expires_in": new_tokens.get("expires_in"),
+                "scope": new_tokens.get("scope"),
+                "user_type": new_tokens.get("userType"),
+                "company_id": new_tokens.get("companyId"),
+                "user_id":new_tokens.get("userId"),
+
             }
+        )
+    
 
-            obj, created = Opportunity.objects.update_or_create(
-                opportunity_id=opportunity_id,
-                defaults=defaults
-            )
+import pandas as pd
+from accounts.models import Opportunity  # Update this with your actual app name
+from django.utils.dateparse import parse_datetime
 
-            if created:
-                print(f"Created new opportunity: {opportunity_id}")
-            else:
-                print(f"Updated existing opportunity: {opportunity_id}")
+def import_and_create_oppor(file):
 
-        #     return response.json()
+
+    # Load the Excel file
+    file_path = file  # Change this to your actual file path
+    df = pd.read_excel(file_path, engine="openpyxl")
+
+    # Mapping column names from the sheet to Django model fields
+    column_mapping = {
+        "Opportunity Name": "opportunity_name",
+        "Contact Name": "full_name",
+        "phone": "phone",
+        "email": "email",
+        "pipeline": "pipeline_name",
+        "stage": "pipeline_stage",
+        "Lead Value": "lead_value",
+        "source": "source",
+        "assigned": "assigned",
+        "Created on": "date_created",
+        "Updated on": "updated_on",
+        "lost reason ID": "lost_reason_id",
+        "lost reason name": "lost_reason_name",
+        "Followers": "followers",
+        "Notes": "notes",
+        "tags": "tags",
+        "Engagement Score": "engagement_score",
+        "status": "status",
+        "Sq. Ft. ": "sq_ft",
+        "Opportunity ID": "opportunity_id",
+        "Contact ID": "contact_id",
+        "Pipeline Stage ID": "pipeline_stage_id",
+        "Pipeline ID": "pipeline_id",
+        "Days Since Last Stage Change Date ": "days_since_last_stage_change",
+        "Days Since Last Status Change Date ": "days_since_last_status_change",
+        "Days Since Last Updated ": "days_since_last_updated",
+    }
+
+    # Rename DataFrame columns
+    df = df.rename(columns=column_mapping)
+
+    # Fill empty values with "No Data" except for numeric fields
+    for col in df.columns:
+        if df[col].dtype == object:  # Only apply to string fields
+            df[col] = df[col].fillna("No Data")
+        else:
+            df[col] = df[col].fillna(0)  # Fill numeric fields with 0
+
+    # Convert date fields
+    date_fields = ["date_created", "updated_on"]
+    for field in date_fields:
+        df[field] = df[field].apply(lambda x: parse_datetime(str(x)) if pd.notnull(x) else None)
+
+    # Iterate over DataFrame and update or create records
+    print("kennnnn:",df)
+    new_opportunities = []
+    for _, row in df.iterrows():
+        opportunity_id = row["opportunity_id"]
+        if opportunity_id and opportunity_id != "No Data":  # Ensure ID is valid
+            new_opportunities.append(Opportunity(**row.to_dict()))
+
+            # obj, created = Opportunity.objects.update_or_create(
+            #     opportunity_id=opportunity_id,  # Lookup field
+            #     defaults=row.to_dict(),  # Update/Create with row data
+            # )
+
+    if new_opportunities:
+        Opportunity.objects.bulk_create(new_opportunities)
+        print(f"Inserted {len(new_opportunities)} new opportunities.")
     else:
-        return {"error": f"Failed to fetch data: {response.status_code}, {response.text}"}
+        print("No new opportunities to insert.")
 
-# Example usage:
-# opportunities = fetch_opportunities()
-# print(opportunities)
+    print("Data import complete.")
+
+
+
+def fetch_contacts(limit=50):
+    location_id = "Xtj525Qgufukym5vtwbZ"
+    token = GHLAuthCredentials.objects.first()
+
+    if not token:
+        print("Error: No authentication token found.")
+        return
+
+    url = f"https://services.leadconnectorhq.com/contacts/?locationId={location_id}&limit={limit}"
+    
+    headers = {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token.access_token}",
+        "Version": "2021-07-28"
+    }
+    
+    response = requests.get(url, headers=headers)
+
+    if response.status_code != 200:
+        print(f"Error: {response.status_code} - {response.text}")
+        return
+
+    data = response.json()
+    contacts_data = data.get("contacts", [])
+
+    if not contacts_data:
+        print("No contacts found.")
+        return
+
+    contacts_to_create = []
+    existing_contacts = {c.contact_id: c for c in Contact.objects.filter(contact_id__in=[c["id"] for c in contacts_data])}
+
+    for contact in contacts_data:
+        contact_id = contact.get("id")
+        if not contact_id:
+            continue  # Skip if no contact_id
+
+        # Convert dateAdded to datetime
+        date_added = contact.get("dateAdded")
+        created = datetime.strptime(date_added, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=pytz.UTC) if date_added else None
+
+        contact_obj = existing_contacts.get(contact_id)
+
+        if contact_obj:
+            # Update existing contact
+            contact_obj.first_name = contact.get("firstName")
+            contact_obj.last_name = contact.get("lastName")
+            contact_obj.business_name = contact.get("companyName")
+            contact_obj.company_name = contact.get("companyName")
+            contact_obj.phone = contact.get("phone")
+            contact_obj.email = contact.get("email")
+            contact_obj.created = created
+            contact_obj.tags = ",".join(contact.get("tags", []))  # Convert list to string
+            contact_obj.utm_source = contact.get("utm_source")
+            contact_obj.utm_medium = contact.get("utm_medium")
+            contact_obj.utm_campaign = contact.get("utm_campaign")
+            contact_obj.utm_content = contact.get("utm_content")
+            contact_obj.utm_term = contact.get("utm_term")
+            contact_obj.utm_traffic_type = contact.get("utm_traffic_type")
+            contact_obj.save()
+            print(f"Updated Contact: {contact_obj.contact_id}")
+
+        else:
+            # Create new contact
+            contacts_to_create.append(Contact(
+                contact_id=contact_id,
+                first_name=contact.get("firstName"),
+                last_name=contact.get("lastName"),
+                business_name=contact.get("companyName"),
+                company_name=contact.get("companyName"),
+                phone=contact.get("phone"),
+                email=contact.get("email"),
+                created=created,
+                tags=",".join(contact.get("tags", [])),  # Convert list to string
+                utm_source=contact.get("utm_source"),
+                utm_medium=contact.get("utm_medium"),
+                utm_campaign=contact.get("utm_campaign"),
+                utm_content=contact.get("utm_content"),
+                utm_term=contact.get("utm_term"),
+                utm_traffic_type=contact.get("utm_traffic_type"),
+            ))
+
+    # Bulk create new contacts
+    if contacts_to_create:
+        Contact.objects.bulk_create(contacts_to_create)
+        print(f"Created {len(contacts_to_create)} new contacts.")
+
+
+
+
+# from django.utils.timezone import make_aware
+
+def import_contacts_from_excel(file_path):
+    df = pd.read_excel(file_path, dtype=str)
+    
+    # Prepare lists for bulk operations
+    contacts_to_create = []
+    existing_contact_ids = set(Contact.objects.values_list('contact_id', flat=True))
+    
+    # First pass - collect all data
+    contact_updates = {}
+    for _, row in df.iterrows():
+        contact_id = row.get('Contact Id')
+        if not contact_id:
+            continue  # Skip rows without a contact ID
+            
+        contact_data = {
+            'first_name': row.get('First Name', ''),
+            'last_name': row.get('Last Name', ''),
+            'business_name': row.get('Business Name', ''),
+            'company_name': row.get('Company Name', ''),
+            'phone': row.get('Phone', ''),
+            'email': row.get('Email', ''),
+            'created': row.get('Created'),
+            'tags': row.get('Tags', ''),
+            'utm_source': row.get('utm_source', ''),
+            'utm_medium': row.get('utm_medium', ''),
+            'utm_campaign': row.get('utm_campaign', ''),
+            'utm_content': row.get('utm_content', ''),
+            'utm_term': row.get('utm_term', ''),
+            'utm_traffic_type': row.get('utm_traffic_type', ''),
+        }
+        
+        if contact_id in existing_contact_ids:
+            # For updating existing contacts
+            contact_updates[contact_id] = contact_data
+        else:
+            # For creating new contacts
+            contacts_to_create.append(Contact(contact_id=contact_id, **contact_data))
+    
+    # Bulk create new contacts
+    if contacts_to_create:
+        Contact.objects.bulk_create(contacts_to_create, batch_size=500)
+        print(f"Created {len(contacts_to_create)} new contacts")
+    
+    # Bulk update existing contacts
+    if contact_updates:
+        # Get all contacts that need updates in one query
+        contacts_to_update = list(Contact.objects.filter(contact_id__in=contact_updates.keys()))
+        
+        # Update each contact with the new data
+        for contact in contacts_to_update:
+            data = contact_updates[contact.contact_id]
+            for field, value in data.items():
+                setattr(contact, field, value)
+        
+        # Perform bulk update
+        update_fields = list(contact_data.keys())  # All fields except contact_id
+        Contact.objects.bulk_update(contacts_to_update, update_fields, batch_size=500)
+        print(f"Updated {len(contacts_to_update)} existing contacts")
+    
+    print("Contacts import completed successfully.")
+
+
+def get_appointments_date_range2(access_token, location_id, start_date=None, end_date=None):
+
+    timezone = datetime.now().astimezone().tzinfo
+    all_appointments = []
+    from dateutil.relativedelta import relativedelta
+
+    
+    # Default to March 1st of current year if start_date not provided
+    if start_date is None:
+        start_date = (datetime.now().date() - relativedelta(months=1))    
+    # Default to yesterday if end_date not provided
+    if end_date is None:
+        end_date = datetime.now(timezone).date() - timedelta(days=0)
+    
+    # Loop through each day in the date range
+    current_date = start_date
+    while current_date <= end_date:
+        # Create start of current day (00:00:00)
+        day_start = datetime.combine(current_date, datetime.min.time()).replace(tzinfo=timezone)
+        
+        # Create end of current day (23:59:59)
+        day_end = datetime.combine(current_date, datetime.max.time()).replace(tzinfo=timezone)
+        
+        print(f"Fetching data for: {current_date}")
+        print(f"Start date: {day_start}")
+        print(f"End date: {day_end}")
+        
+        # Fetch appointments for the current day
+        daily_appointments = fetch_ghl_appointments(access_token, location_id, day_start, day_end)
+        
+        formatted_date = current_date.strftime("%b %d %Y")
+        
+        # Filter data based on the current date's dateAdded
+        if daily_appointments and "data" in daily_appointments:
+            filtered_data = [entry for entry in daily_appointments["data"] if entry["dateAdded"].startswith(formatted_date)]
+            print(f"Found {len(filtered_data)} appointments for {formatted_date}")
+            
+            if filtered_data:
+                save_appointments_to_db(filtered_data)
+                all_appointments.extend(filtered_data)
+        
+        # Move to the next day
+        current_date += timedelta(days=1)
+    
+    return all_appointments
+
+
+
+
