@@ -188,17 +188,31 @@ def fetch_calls_for_last_days(retry_count=0):
     token_generation_step1()
     token = IdentityToolkitAuth.objects.first()
 
-    # Get today's date in UTC
+    from datetime import datetime, timedelta
 
-    import datetime
-    import pytz
+    def generate_date_range(days_ago_start=2, days_ago_end=0):
+        # Get today's date
+        today = datetime.now()
+        
+        # Calculate end date (days_ago_end at 18:29:59.999)
+        end_date = (today - timedelta(days=days_ago_end)).replace(hour=18, minute=29, second=59, microsecond=999000)
+        
+        # Calculate start date (days_ago_start at 18:30:00.000)
+        start_date = (today - timedelta(days=days_ago_start)).replace(hour=18, minute=30, second=0, microsecond=0)
+        
+        # Format dates as required
+        formatted_end_date = end_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        formatted_start_date = start_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        
+        return formatted_start_date, formatted_end_date
     
-    utc_now = datetime.datetime.utcnow().replace(tzinfo=pytz.UTC)
-    # Fetch data for today and yesterday only
-    for i in range(3):
-        start_date = (utc_now - datetime.timedelta(days=i + 1)).isoformat()
-        end_date = (utc_now - datetime.timedelta(days=i)).isoformat()
-
+    for i in range(4):  # Adjust range as needed (2 for today and yesterday)
+        # Both start and end dates shift back by i days each iteration
+        days_back_end = i
+        days_back_start = i + 2  # Start date is always 2 days before end date
+        
+        start_date, end_date = generate_date_range(days_back_start, days_back_end)
+        
         payload = {
             "callStatus": [],
             "campaign": [],
@@ -221,8 +235,9 @@ def fetch_calls_for_last_days(retry_count=0):
             "userId": ""
         }
 
-        print("start date : -----------------", start_date)
-        print("end date : -----------------", end_date)
+        print(f"Fetching data for period {i+1}:")
+        print(f"Start Date: {start_date}")
+        print(f"End Date: {end_date}")
 
         headers = {
             "Token-id": f"{token.id_token}",
@@ -338,7 +353,61 @@ def update_or_store_calls(calls):
 
 
 
+def generate_date_range(days_ago_start=2, days_ago_end=0):
+    import datetime
 
+    # Get today's date
+    today = datetime.datetime.now()
+    
+    # Calculate end date (days_ago_end at 18:29:59.999)
+    end_date = (today - datetime.timedelta(days=days_ago_end)).replace(hour=18, minute=29, second=59, microsecond=999000)
+    
+    # Calculate start date (days_ago_start at 18:30:00.000)
+    start_date = (today - datetime.timedelta(days=days_ago_start)).replace(hour=18, minute=30, second=0, microsecond=0)
+    
+    # Format dates as required
+    formatted_end_date = end_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    formatted_start_date = start_date.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    
+    return formatted_start_date, formatted_end_date
+
+def run():
+    # Number of iterations/days to go back
+    days_to_check = 4
+    
+    for i in range(days_to_check):
+        # Both start and end dates shift back by i days each iteration
+        days_back_end = i
+        days_back_start = i + 2  # Start date is always 2 days before end date
+        
+        start_date, end_date = generate_date_range(days_back_start, days_back_end)
+        
+        payload = {
+            "callStatus": [],
+            "campaign": [],
+            "deviceType": [],
+            "direction": None,
+            "duration": None,
+            "endDate": end_date,
+            "firstTime": False,
+            "keyword": [],
+            "landingPage": [],
+            "limit": 50,
+            "locationId": "Xtj525Qgufukym5vtwbZ",
+            "qualifiedLead": False,
+            "referrer": [],
+            "selectedPool": "all",
+            "skip": 0,
+            "source": [],
+            "sourceType": [],
+            "startDate": start_date,
+            "userId": ""
+        }
+        
+        print(f"Iteration {i+1}:")
+        print(f"Start Date: {start_date}")
+        print(f"End Date: {end_date}")
+        # Your API call here with the payload
 
 
 
