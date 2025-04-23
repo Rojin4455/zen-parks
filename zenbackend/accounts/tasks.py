@@ -10,11 +10,11 @@ from accounts.utils import fetch_and_store_google_campaigns,fetch_campaigns_face
 @shared_task
 def make_api_call():
     fetch_and_store_google_campaigns()
-    fetch_opportunities()
-    appoinment_fetch_usage()
+    # fetch_opportunities()
+    # appoinment_fetch_usage()
     # fetch_campaigns_facebook()
     fetch_calls_for_last_days()
-    fetch_contacts()
+    # fetch_contacts()
     return
     
 
