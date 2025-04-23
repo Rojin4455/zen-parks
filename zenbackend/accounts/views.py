@@ -2,59 +2,28 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 import json
 from django.shortcuts import redirect
-from accounts.models import Opportunity, Budget, GHLAuthCredentials
+from accounts.models import Opportunity, Budget, GHLAuthCredentials, UserAppointment, GHLAuthCredentials
 from decouple import config
 import requests
+from accounts.services import get_ghl_contact
+from django.utils.dateparse import parse_datetime
+from accounts.tasks import handle_webhook_event
+
 
 @csrf_exempt
 def webhook_handler_for_opportunity(request):
-    if request.method == "POST":
-        print("request.post triggered")
-        try:
-            data = json.loads(request.body)
-            print("data: ", data)
-            opportunity_id = data.get("id")
-            
-            opportunity, created = Opportunity.objects.update_or_create(
-            opportunity_id=opportunity_id,
-            defaults={
-                "contact_id": data.get("contact_id", None),
-                "full_name": data.get("full_name", None),
-                "email": data.get("email", None),
-                "phone": data.get("phone", None),
-                "tags": data.get("tags", None),
-                "date_created": data.get("date_created", None),
-                "updated_on": data.get("updated_on", None),
-                "opportunity_name": data.get("opportunity_name", None),
-                "status": data.get("status", None),
-                "lead_value": data.get("lead_value", None),
-                "source": data.get("source", None),
-                "pipeline_stage": data.get("pipeline_stage", None),
-                "pipeline_stage_id": data.get("pipeline_stage_id", None),
-                "pipeline_id": data.get("pipeline_id", None),
-                "pipeline_name": data.get("pipeline_name", None),
-                "assigned": data.get("assigned", None),
-                "lost_reason_id": data.get("lost_reason_id", None),
-                "lost_reason_name": data.get("lost_reason_name", None),
-                "followers": data.get("followers", None),
-                "notes": data.get("notes", None),
-                "engagement_score": data.get("engagement_score", None),
-                "days_since_last_stage_change": data.get("days_since_last_stage_change", None),
-                "days_since_last_status_change": data.get("days_since_last_status_change", None),
-                "days_since_last_updated": data.get("days_since_last_updated", None),
-                "sq_ft": data.get("customData", {}).get("Sq. Ft.", None),
-            }
-            )
-            
-            message = "Opportunity updated successfully" if not created else "Opportunity created successfully"
-            return JsonResponse({"message": message, "opportunity_id": opportunity.id}, status=201)
-        
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "Invalid JSON data"}, status=400)
-        except Exception as e:
-            return JsonResponse({"error": str(e)}, status=500)
-    
-    return JsonResponse({"error": "Invalid request method"}, status=405)
+    if request.method != "POST":
+        return JsonResponse({"message": "Method not allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        print("date:----- ", data)
+        event_type = data.get("type")
+        handle_webhook_event.delay(data, event_type)
+        return JsonResponse({"message":"Webhook received"}, status=200)
+
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
 
 
 

@@ -31,7 +31,7 @@ SECRET_KEY = config("SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config("DEBUG")
 
-ALLOWED_HOSTS = ['localhost','127.0.0.1','44.202.131.14', '44.202.131.14,44.202.131.14','44.206.252.111']
+ALLOWED_HOSTS = ['localhost','127.0.0.1','3.87.70.52', 'siteapi.zenresidential.ca']
 
 # Application definition
 

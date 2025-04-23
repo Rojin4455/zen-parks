@@ -2,7 +2,7 @@ import requests
 from decouple import config
 from accounts.serializers import FirebaseTokenSerializer, LeadConnectorAuthSerializer, IdentityToolkitAuthSerializer
 from accounts.models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, CallReport, FacebookCampaign, Appointment, GoogleCampaignTotal, GHLAuthCredentials, Opportunity, Contact
-
+from accounts.helpers import get_pipeline_stages, create_or_update_contact
 
 def token_generation_step1():
 
@@ -190,7 +190,7 @@ def fetch_calls_for_last_days(retry_count=0):
 
     from datetime import datetime, timedelta
 
-    def generate_date_range(days_ago_start=2, days_ago_end=0):
+    def generate_date_range(days_ago_start=30, days_ago_end=0):
         # Get today's date
         today = datetime.now()
         
@@ -206,7 +206,7 @@ def fetch_calls_for_last_days(retry_count=0):
         
         return formatted_start_date, formatted_end_date
     
-    for i in range(4):  # Adjust range as needed (2 for today and yesterday)
+    for i in range(3):  # Adjust range as needed (2 for today and yesterday)
         # Both start and end dates shift back by i days each iteration
         days_back_end = i
         days_back_start = i + 2  # Start date is always 2 days before end date
@@ -425,6 +425,7 @@ def fetch_campaigns_facebook():
         "referer": "https://app.gohighlevel.com/",
         "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
     }
+    import datetime
 
     today = datetime.date.today()
 
@@ -483,39 +484,45 @@ def fetch_and_store_google_campaigns():
     import datetime
     today = datetime.date.today()
     yesterday = today - datetime.timedelta(days=1)
+    print(f"Today12: {today}, Yesterday12: {yesterday}")
 
-    for current_date in [yesterday, today]:
-        params = {"start": current_date, "end": current_date, "sample": "false"}
-        response = requests.get(url, headers=headers, params=params)
+    for i in range(2):
+        today = datetime.date.today() - datetime.timedelta(days=i)
+        yesterday = today - datetime.timedelta(days=1)
+        print(f"Today: {today}, Yesterday: {yesterday}")
 
-        if response.status_code == 200:
-            data = response.json().get("total", {})
-            if not data:
-                print(f"No campaign data found for {current_date}")
-                continue
+        for current_date in [yesterday, today]:
+            params = {"start": current_date, "end": current_date, "sample": "false"}
+            response = requests.get(url, headers=headers, params=params)
 
-            # Check if data for yesterday already exists
-            
-            obj, created = GoogleCampaignTotal.objects.update_or_create(
-                date=current_date,
-                defaults={
-                    "all_conversions": data.get('allConversions', 0),
-                    "avg_cpc": data.get('avgCpc', 0),
-                    "clicks": data.get('clicks', 0),
-                    "conversion_rate": data.get('conversionRate', 0),
-                    "conversions": data.get('conversions', 0),
-                    "cost": data.get('cost', 0),
-                    "cost_per_conversion": data.get('costPerConversion', 0),
-                    "impressions": data.get('impressions', 0),
-                    "interactions": data.get('interactions', 0),
-                    "view_through_conversions": data.get('viewThroughConversions', 0),
-                }
-            )
-            print("obj:", obj)
-            print("created: ", created)
-            print("Google Campaign Data Stored Successfully for", current_date)
-        else:
-            print(f"Error: {response.status_code} - {response.text}")
+            if response.status_code == 200:
+                data = response.json().get("total", {})
+                if not data:
+                    print(f"No campaign data found for {current_date}")
+                    continue
+
+                # Check if data for yesterday already exists
+                
+                obj, created = GoogleCampaignTotal.objects.update_or_create(
+                    date=current_date,
+                    defaults={
+                        "all_conversions": data.get('allConversions', 0),
+                        "avg_cpc": data.get('avgCpc', 0),
+                        "clicks": data.get('clicks', 0),
+                        "conversion_rate": data.get('conversionRate', 0),
+                        "conversions": data.get('conversions', 0),
+                        "cost": data.get('cost', 0),
+                        "cost_per_conversion": data.get('costPerConversion', 0),
+                        "impressions": data.get('impressions', 0),
+                        "interactions": data.get('interactions', 0),
+                        "view_through_conversions": data.get('viewThroughConversions', 0),
+                    }
+                )
+                print("obj:", obj)
+                print("created: ", created)
+                print("Google Campaign Data Stored Successfully for", current_date)
+            else:
+                print(f"Error: {response.status_code} - {response.text}")
 
     print("Last days data fetched & stored successfully!")
     return 
@@ -844,26 +851,36 @@ def create_or_update_opportunity(opportunity_data):
     for data in opportunity_data:
         opportunity_id = data.get("id")
         opportunity = existing_opportunities.get(opportunity_id)
+        source = data.get("source")
+        source = source.get("source", "No Data") if isinstance(source, dict) else (source or "No Data")
+        pipeline_stage_name = "Unknown Stage"
+
+        for stage in get_pipeline_stages()["stages"]:
+            if stage["id"] == data.get("pipelineStageId"):
+                pipeline_stage_name = stage["name"]
+                break
 
         opportunity_data_dict = {
             "opportunity_id": opportunity_id,
-            "full_name": data.get("name"),
+            "full_name": data.get("contact", {}).get("name", "No Data"),
             "lead_value": data.get("monetaryValue"),
             "pipeline_id": data.get("pipelineId"),
-            "pipeline_stage_id": data.get("pipelineStageId"),
-            "assigned": data.get("assignedTo"),
+            "pipeline_stage_id": data.get("pipelineStageId", "No Data"),
+            "assigned": data.get("assignedTo", "No Data"),
             "status": data.get("status"),
-            "source": data.get("source"),
+            "source": source,
             "days_since_last_status_change": data.get("lastStatusChangeAt"),
             "days_since_last_stage_change": data.get("lastStageChangeAt"),
             "date_created": parse_datetime(data.get("createdAt")),
             "updated_on": parse_datetime(data.get("updatedAt")),
             "contact_id": data.get("contactId"),
-            "lost_reason_id": data.get("lostReasonId"),
+            "lost_reason_id": data.get("lostReasonId", "No Data"),
             "followers": ", ".join(data.get("followers", [])),
-            "email": data.get("contact", {}).get("email"),
-            "phone": data.get("contact", {}).get("phone"),
-            "tags": ", ".join(data.get("contact", {}).get("tags", [])),
+            "email": data.get("contact", {}).get("email", "No Data"),
+            "phone": data.get("contact", {}).get("phone", "No Data"),
+            "tags":", ".join(data.get("contact", {}).get("tags", [])),
+            "pipeline_stage":pipeline_stage_name,
+            "pipeline_name":"The Parks - Lead Stages"
         }
 
         if opportunity:
@@ -939,6 +956,8 @@ def import_and_create_oppor(file):
     # Load the Excel file
     file_path = file  # Change this to your actual file path
     df = pd.read_excel(file_path, engine="openpyxl")
+    df = pd.read_excel(file_path, sheet_name="Accounts Opportunity", dtype=str)
+
 
     # Mapping column names from the sheet to Django model fields
     column_mapping = {
@@ -960,14 +979,14 @@ def import_and_create_oppor(file):
         "tags": "tags",
         "Engagement Score": "engagement_score",
         "status": "status",
-        "Sq. Ft. ": "sq_ft",
+        "Sq. Ft.": "sq_ft",
         "Opportunity ID": "opportunity_id",
         "Contact ID": "contact_id",
         "Pipeline Stage ID": "pipeline_stage_id",
         "Pipeline ID": "pipeline_id",
-        "Days Since Last Stage Change Date ": "days_since_last_stage_change",
-        "Days Since Last Status Change Date ": "days_since_last_status_change",
-        "Days Since Last Updated ": "days_since_last_updated",
+        "Days Since Last Stage Change Date": "days_since_last_stage_change",
+        "Days Since Last Status Change Date": "days_since_last_status_change",
+        "Days Since Last Updated": "days_since_last_updated",
     }
 
     # Rename DataFrame columns
@@ -1008,7 +1027,7 @@ def import_and_create_oppor(file):
 
 
 
-def fetch_contacts(limit=50):
+def fetch_contacts(limit=100):
     location_id = "Xtj525Qgufukym5vtwbZ"
     token = GHLAuthCredentials.objects.first()
 
@@ -1041,125 +1060,140 @@ def fetch_contacts(limit=50):
     existing_contacts = {c.contact_id: c for c in Contact.objects.filter(contact_id__in=[c["id"] for c in contacts_data])}
 
     for contact in contacts_data:
-        contact_id = contact.get("id")
-        if not contact_id:
-            continue  # Skip if no contact_id
+        create_or_update_contact(contact)
+        # contact_id = contact.get("id")
+        # if not contact_id:
+        #     continue
 
         # Convert dateAdded to datetime
-        date_added = contact.get("dateAdded")
-        created = datetime.strptime(date_added, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=pytz.UTC) if date_added else None
+    #     date_added = contact.get("dateAdded")
+    #     created = datetime.strptime(date_added, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=pytz.UTC) if date_added else None
 
-        contact_obj = existing_contacts.get(contact_id)
+    #     contact_obj = existing_contacts.get(contact_id)
 
-        if contact_obj:
-            # Update existing contact
-            contact_obj.first_name = contact.get("firstName")
-            contact_obj.last_name = contact.get("lastName")
-            contact_obj.business_name = contact.get("companyName")
-            contact_obj.company_name = contact.get("companyName")
-            contact_obj.phone = contact.get("phone")
-            contact_obj.email = contact.get("email")
-            contact_obj.created = created
-            contact_obj.tags = ",".join(contact.get("tags", []))  # Convert list to string
-            contact_obj.utm_source = contact.get("utm_source")
-            contact_obj.utm_medium = contact.get("utm_medium")
-            contact_obj.utm_campaign = contact.get("utm_campaign")
-            contact_obj.utm_content = contact.get("utm_content")
-            contact_obj.utm_term = contact.get("utm_term")
-            contact_obj.utm_traffic_type = contact.get("utm_traffic_type")
-            contact_obj.save()
-            print(f"Updated Contact: {contact_obj.contact_id}")
+    #     if contact_obj:
+    #         # Update existing contact
+    #         contact_obj.first_name = contact.get("firstName")
+    #         contact_obj.last_name = contact.get("lastName")
+    #         contact_obj.business_name = contact.get("companyName")
+    #         contact_obj.company_name = contact.get("companyName")
+    #         contact_obj.phone = contact.get("phone")
+    #         contact_obj.email = contact.get("email")
+    #         contact_obj.created = created
+    #         contact_obj.tags = ",".join(contact.get("tags", []))  # Convert list to string
+    #         contact_obj.utm_source = contact.get("utm_source")
+    #         contact_obj.utm_medium = contact.get("utm_medium")
+    #         contact_obj.utm_campaign = contact.get("utm_campaign")
+    #         contact_obj.utm_content = contact.get("utm_content")
+    #         contact_obj.utm_term = contact.get("utm_term")
+    #         contact_obj.utm_traffic_type = contact.get("utm_traffic_type")
+    #         contact_obj.save()
+    #         print(f"Updated Contact: {contact_obj.contact_id}")
 
-        else:
-            # Create new contact
-            contacts_to_create.append(Contact(
-                contact_id=contact_id,
-                first_name=contact.get("firstName"),
-                last_name=contact.get("lastName"),
-                business_name=contact.get("companyName"),
-                company_name=contact.get("companyName"),
-                phone=contact.get("phone"),
-                email=contact.get("email"),
-                created=created,
-                tags=",".join(contact.get("tags", [])),  # Convert list to string
-                utm_source=contact.get("utm_source"),
-                utm_medium=contact.get("utm_medium"),
-                utm_campaign=contact.get("utm_campaign"),
-                utm_content=contact.get("utm_content"),
-                utm_term=contact.get("utm_term"),
-                utm_traffic_type=contact.get("utm_traffic_type"),
-            ))
+    #     else:
+    #         # Create new contact
+    #         contacts_to_create.append(Contact(
+    #             contact_id=contact_id,
+    #             first_name=contact.get("firstName"),
+    #             last_name=contact.get("lastName"),
+    #             business_name=contact.get("companyName"),
+    #             company_name=contact.get("companyName"),
+    #             phone=contact.get("phone"),
+    #             email=contact.get("email"),
+    #             created=created,
+    #             tags=",".join(contact.get("tags", [])),  # Convert list to string
+    #             utm_source=contact.get("utm_source"),
+    #             utm_medium=contact.get("utm_medium"),
+    #             utm_campaign=contact.get("utm_campaign"),
+    #             utm_content=contact.get("utm_content"),
+    #             utm_term=contact.get("utm_term"),
+    #             utm_traffic_type=contact.get("utm_traffic_type"),
+    #         ))
 
-    # Bulk create new contacts
-    if contacts_to_create:
-        Contact.objects.bulk_create(contacts_to_create)
-        print(f"Created {len(contacts_to_create)} new contacts.")
+    # # Bulk create new contacts
+    # if contacts_to_create:
+    #     Contact.objects.bulk_create(contacts_to_create)
+    #     print(f"Created {len(contacts_to_create)} new contacts.")
 
 
 
 
 # from django.utils.timezone import make_aware
 
-def import_contacts_from_excel(file_path):
-    df = pd.read_excel(file_path, dtype=str)
+import pandas as pd
+# from your_app.models import Contact  # Replace with your actual model import
+
+def safe_get(value):
+    return value if pd.notna(value) else None
+
+# def import_contacts_from_excel(file_path):
+#     df = pd.read_excel(file_path, dtype=str)
     
-    # Prepare lists for bulk operations
-    contacts_to_create = []
-    existing_contact_ids = set(Contact.objects.values_list('contact_id', flat=True))
-    
-    # First pass - collect all data
-    contact_updates = {}
-    for _, row in df.iterrows():
-        contact_id = row.get('Contact Id')
-        if not contact_id:
-            continue  # Skip rows without a contact ID
-            
-        contact_data = {
-            'first_name': row.get('First Name', ''),
-            'last_name': row.get('Last Name', ''),
-            'business_name': row.get('Business Name', ''),
-            'company_name': row.get('Company Name', ''),
-            'phone': row.get('Phone', ''),
-            'email': row.get('Email', ''),
-            'created': row.get('Created'),
-            'tags': row.get('Tags', ''),
-            'utm_source': row.get('utm_source', ''),
-            'utm_medium': row.get('utm_medium', ''),
-            'utm_campaign': row.get('utm_campaign', ''),
-            'utm_content': row.get('utm_content', ''),
-            'utm_term': row.get('utm_term', ''),
-            'utm_traffic_type': row.get('utm_traffic_type', ''),
-        }
-        
-        if contact_id in existing_contact_ids:
-            # For updating existing contacts
-            contact_updates[contact_id] = contact_data
-        else:
-            # For creating new contacts
-            contacts_to_create.append(Contact(contact_id=contact_id, **contact_data))
-    
-    # Bulk create new contacts
-    if contacts_to_create:
-        Contact.objects.bulk_create(contacts_to_create, batch_size=500)
-        print(f"Created {len(contacts_to_create)} new contacts")
-    
-    # Bulk update existing contacts
-    if contact_updates:
-        # Get all contacts that need updates in one query
-        contacts_to_update = list(Contact.objects.filter(contact_id__in=contact_updates.keys()))
-        
-        # Update each contact with the new data
-        for contact in contacts_to_update:
-            data = contact_updates[contact.contact_id]
-            for field, value in data.items():
-                setattr(contact, field, value)
-        
-        # Perform bulk update
-        update_fields = list(contact_data.keys())  # All fields except contact_id
-        Contact.objects.bulk_update(contacts_to_update, update_fields, batch_size=500)
-        print(f"Updated {len(contacts_to_update)} existing contacts")
-    
-    print("Contacts import completed successfully.")
+#     contacts_to_create = []
+#     existing_contact_ids = set(Contact.objects.values_list('contact_id', flat=True))
+
+#     # First pass - collect contact IDs
+#     contact_ids_in_file = []
+#     for _, row in df.iterrows():
+#         contact_id_val = safe_get(row.get('Contact Id'))
+#         if contact_id_val:
+#             contact_ids_in_file.append(contact_id_val)
+
+#     # Delete contacts not in the Excel file
+#     Contact.objects.exclude(contact_id__in=contact_ids_in_file).delete()
+
+#     contact_updates = {}
+
+#     for _, row in df.iterrows():
+#         contact_id_val = safe_get(row.get('Contact Id'))
+#         if not contact_id_val:
+#             continue  # Skip rows without a contact ID
+
+#         contact_data = {
+#             'first_name': safe_get(row.get('First Name')),
+#             'last_name': safe_get(row.get('Last Name')),
+#             'business_name': safe_get(row.get('Business Name')),
+#             'company_name': safe_get(row.get('Company Name')),
+#             'phone': safe_get(row.get('Phone')),
+#             'email': safe_get(row.get('Email')),
+#             'created': safe_get(row.get('Created')),
+#             'tags': safe_get(row.get('Tags')),
+#             'utm_source': safe_get(row.get('utm_source')),
+#             'utm_medium': safe_get(row.get('utm_medium')),
+#             'utm_campaign': safe_get(row.get('utm_campaign')),
+#             'utm_content': safe_get(row.get('utm_content')),
+#             'utm_term': safe_get(row.get('utm_term')),
+#             'utm_traffic_type': safe_get(row.get('utm_traffic_type')),
+#         }
+
+#         if contact_id_val in existing_contact_ids:
+#             contact_updates[contact_id_val] = contact_data
+#         else:
+#             contacts_to_create.append(Contact(contact_id=contact_id_val, **contact_data))
+
+#     # Bulk create new contacts
+#     if contacts_to_create:
+#         Contact.objects.bulk_create(contacts_to_create, batch_size=500)
+#         print(f"Created {len(contacts_to_create)} new contacts")
+
+#     # Bulk update existing contacts
+#     if contact_updates:
+#         contacts_to_update = list(Contact.objects.filter(contact_id__in=contact_updates.keys()))
+#         for contact in contacts_to_update:
+#             data = contact_updates[contact.contact_id]
+#             for field, value in data.items():
+#                 setattr(contact, field, value)
+
+#         update_fields = list(contact_data.keys())
+#         Contact.objects.bulk_update(contacts_to_update, update_fields, batch_size=500)
+#         print(f"Updated {len(contacts_to_update)} existing contacts")
+
+#     print("Contacts import completed successfully.")
+
+
+
+def safe_get(value):
+    return "No Data" if pd.isna(value) or value == "" else value
 
 
 def get_appointments_date_range2(access_token, location_id, start_date=None, end_date=None):
@@ -1171,7 +1205,7 @@ def get_appointments_date_range2(access_token, location_id, start_date=None, end
     
     # Default to March 1st of current year if start_date not provided
     if start_date is None:
-        start_date = (datetime.now().date() - relativedelta(months=1))    
+        start_date = (datetime.now().date() - relativedelta(months=1)) 
     # Default to yesterday if end_date not provided
     if end_date is None:
         end_date = datetime.now(timezone).date() - timedelta(days=0)
@@ -1207,6 +1241,91 @@ def get_appointments_date_range2(access_token, location_id, start_date=None, end
         current_date += timedelta(days=1)
     
     return all_appointments
+
+
+
+def update_appointments():
+    # Get all existing appointment IDs from your database
+    existing_appointments = list(UserAppointment.objects.filter(appointment_id="5lexvd0x5AtDcMF7rDgb").values_list("appointment_id", flat=True))
+    
+    # Get the access token from your credentials table
+    auth_credentials = GHLAuthCredentials.objects.first()
+    if not auth_credentials:
+        print("No authentication credentials found")
+        return
+    
+    access_token = auth_credentials.access_token
+    headers = {
+        'Accept': 'application/json',
+        'Authorization': f'Bearer {access_token}',
+        'Version': '2021-04-15'
+    }
+    
+    appointments_to_update = []
+    processed_count = 0
+    batch_size = 100  # Adjust based on your needs
+    
+    # Process appointments in batches
+    for appointment_id in existing_appointments:
+        try:
+            # Fetch appointment data from API
+            response = requests.get(
+                f"https://services.leadconnectorhq.com/calendars/events/appointments/{appointment_id}",
+                headers=headers
+            )
+            
+            if response.status_code == 200:
+                appointment_data = response.json().get('appointment', {})
+                
+                # Get existing appointment from database
+                appointment = UserAppointment.objects.get(appointment_id=appointment_id)
+                
+                # Update appointment fields based on API response
+                appointment.contact_name = appointment_data.get('title', '')
+                appointment.appointment_status = appointment_data.get('appointmentStatus', '')
+                appointment.title = appointment_data.get('title', '')
+                appointment.start_time = appointment_data.get('startTime', '')
+                appointment.date_added = appointment_data.get('dateAdded', '')
+                appointment.contact_id = appointment_data.get('contactId', '')
+                appointment.assigned_to = appointment_data.get('assignedUserId', '')
+                
+                # Add to bulk update list
+                appointments_to_update.append(appointment)
+                processed_count += 1
+                
+                # Perform bulk update when batch size is reached
+                if processed_count % batch_size == 0:
+                    with transaction.atomic():
+                        UserAppointment.objects.bulk_update(
+                            appointments_to_update,
+                            ['contact_name', 'appointment_status', 'title', 'start_time', 
+                             'date_added', 'contact_id', 'assigned_to']
+                        )
+                    print(f"Updated {processed_count} appointments")
+                    appointments_to_update = []
+                    
+            else:
+                print(f"Failed to fetch appointment {appointment_id}: {response.status_code}")
+                
+        except Exception as e:
+            print(f"Error processing appointment {appointment_id}: {str(e)}")
+    
+    # Update any remaining appointments
+    if appointments_to_update:
+        with transaction.atomic():
+            UserAppointment.objects.bulk_update(
+                appointments_to_update,
+                ['contact_name', 'appointment_status', 'title', 'start_time', 
+                 'date_added', 'contact_id', 'assigned_to']
+            )
+        print(f"Updated remaining {len(appointments_to_update)} appointments")
+    
+    print(f"Total appointments processed: {processed_count}")
+    return processed_count
+
+
+
+
 
 
 
