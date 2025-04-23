@@ -152,7 +152,7 @@ def callback(request):
     if not code:
         return JsonResponse({"error": "Authorization code not received from OAuth"}, status=400)
 
-    return redirect(f'http://localhost:8000/accounts/auth/tokens?code={code}')
+    return redirect(f'{config("BASE_URI")}/accounts/auth/tokens?code={code}')
 
 
 def tokens(request):
@@ -165,7 +165,7 @@ def tokens(request):
         "grant_type": "authorization_code",
         "client_id": GHL_CLIENT_ID,
         "client_secret": GHL_CLIENT_SECRET,
-        "redirect_uri": 'http://localhost:8000/accounts/oauth/callback/',
+        "redirect_uri": GHL_REDIRECTED_URI,
         "code": authorization_code,
     }
 
