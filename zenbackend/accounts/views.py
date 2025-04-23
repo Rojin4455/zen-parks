@@ -2,7 +2,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 import json
 from django.shortcuts import redirect
-from accounts.models import Opportunity, Budget, GHLAuthCredentials, UserAppointment, GHLAuthCredentials
+from accounts.models import Opportunity, Budget, GHLAuthCredentials, UserAppointment, GHLAuthCredentials, WebhookLog
 from decouple import config
 import requests
 from accounts.services import get_ghl_contact
@@ -18,6 +18,7 @@ def webhook_handler_for_opportunity(request):
     try:
         data = json.loads(request.body)
         print("date:----- ", data)
+        WebhookLog.objects.create(data=data)
         event_type = data.get("type")
         handle_webhook_event.delay(data, event_type)
         return JsonResponse({"message":"Webhook received"}, status=200)

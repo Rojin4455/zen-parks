@@ -287,3 +287,11 @@ class GHLAuthCredentials(models.Model):
 
     def __str__(self):
         return f"{self.user_id} - {self.company_id}"
+    
+
+class WebhookLog(models.Model):
+    received_at = models.DateTimeField(auto_now_add=True)
+    data = models.TextField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.webhook_id} : {self.received_at}"
