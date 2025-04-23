@@ -14,7 +14,7 @@ def make_api_call():
     appoinment_fetch_usage()
     # fetch_campaigns_facebook()
     fetch_calls_for_last_days()
-    fetch_contacts()
+    # fetch_contacts()
     return
     
 
