@@ -1330,3 +1330,68 @@ def update_appointments():
 
 
 
+
+
+
+from accounts.services import fetch_calendar_data
+from django.core.exceptions import ObjectDoesNotExist
+
+def update_appo(appointment):
+    appointment_id = appointment.get("id")
+
+    try:
+        # Try to get the existing object
+        existing = UserAppointment.objects.get(appointment_id=appointment_id)
+        calendar_name = existing.calendar_name or fetch_calendar_data(appointment.get("calendarId"))
+    except ObjectDoesNotExist:
+        # If not found, fetch the calendar name
+        calendar_name = fetch_calendar_data(appointment.get("calendarId"))
+
+    # Then update or create the record
+    UserAppointment.objects.update_or_create(
+        appointment_id=appointment_id,
+        defaults={
+            "contact_name": appointment.get("title"),
+            "appointment_status": appointment.get("appointmentStatus"),
+            "title": appointment.get("title"),
+            "start_time": appointment.get("startTime"),
+            "date_added": appointment.get("dateAdded"),
+            "assigned_to": appointment.get("assignedUserId"),
+            "contact_id": appointment.get("contactId"),
+            "source": appointment.get("source"),
+            "sort": appointment.get("users", []),
+            # "created_by": data.get("appId"),
+            "mode": appointment.get("groupId"),
+            "calendar_name": calendar_name,
+        }
+    )
+    print("appointment is created or updated")
+
+
+def get_appointment_details():
+    token = GHLAuthCredentials.objects.first()
+    appointments = UserAppointment.objects.all()
+    error_app = []
+    
+    for appointment in appointments:
+        url = f"https://services.leadconnectorhq.com/calendars/events/appointments/{appointment.appointment_id}"
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token.access_token}",
+            "Version": "2021-04-15"
+        }
+
+        try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            update_appo(response.json()["appointment"])
+        except requests.exceptions.HTTPError as err:
+            print(f"HTTP error occurred: {err}")
+            error_app.append(appointment.id)
+            
+        except Exception as e:
+            error_app.append(appointment.id)
+
+            print(f"An error occurred: {e}")
+
+    print("error appointmens list: ", error_app)    
