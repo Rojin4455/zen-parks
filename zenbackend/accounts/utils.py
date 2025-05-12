@@ -1,7 +1,7 @@
 import requests
 from decouple import config
 from accounts.serializers import FirebaseTokenSerializer, LeadConnectorAuthSerializer, IdentityToolkitAuthSerializer
-from accounts.models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, CallReport, FacebookCampaign, Appointment, GoogleCampaignTotal, GHLAuthCredentials, Opportunity, Contact
+from accounts.models import FirebaseToken, LeadConnectorAuth, IdentityToolkitAuth, CallReport, FacebookCampaign, Appointment, GoogleCampaignTotal, GHLAuthCredentials, Opportunity, Contact, SMS, Email
 from accounts.helpers import get_pipeline_stages, create_or_update_contact
 
 def token_generation_step1():
@@ -212,6 +212,7 @@ def fetch_calls_for_last_days(retry_count=0):
         days_back_start = i + 2  # Start date is always 2 days before end date
         
         start_date, end_date = generate_date_range(days_back_start, days_back_end)
+        print("start_date, end_date",start_date, end_date)
         
         payload = {
             "callStatus": [],
@@ -529,7 +530,7 @@ def fetch_and_store_google_campaigns():
 
 
 
-def get_timestamp_range(date_str):
+def get_timestamp_range(date_str, days_before=3, days_after=2):
     import pytz
     """
     Convert a date string like '2025-03-04' to start and end timestamps in ms
@@ -537,21 +538,29 @@ def get_timestamp_range(date_str):
     """
     # Parse the date string
     # year, month, day = map(int, date_str.split('-'))
-    date_obj = date_str.date()
-    
-    # Set up Mountain Time timezone
+    # Convert input to date object if it's a string
+    if isinstance(date_str, str):
+        date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+    elif isinstance(date_str, datetime):
+        date_obj = date_str.date()
+    else:
+        raise TypeError("date_input must be a string or datetime object")
+
+    # Mountain Time zone
     mountain_tz = pytz.timezone('America/Edmonton')
-    
-    # Create start of day in Mountain Time
-    start_date = mountain_tz.localize(datetime.combine(date_obj, datetime.min.time()))
-    
-    # Create end of day in Mountain Time
-    end_date = mountain_tz.localize(datetime.combine(date_obj, datetime.max.time()))
-    
-    # Convert to milliseconds timestamp
-    start_ms = int(start_date.timestamp() * 1000)
-    end_ms = int(end_date.timestamp() * 1000)
-    
+
+    # Calculate date range
+    start_day = date_obj - timedelta(days=days_before)
+    end_day = date_obj + timedelta(days=days_after)
+
+    # Localize start and end of day
+    start_dt = mountain_tz.localize(datetime.combine(start_day, datetime.min.time()))
+    end_dt = mountain_tz.localize(datetime.combine(end_day, datetime.max.time()))
+
+    # Convert to milliseconds
+    start_ms = int(start_dt.timestamp() * 1000)
+    end_ms = int(end_dt.timestamp() * 1000)
+
     return start_ms, end_ms
 
 
@@ -666,6 +675,15 @@ def appoinment_fetch_usage():
     # Fetch today's appointments
     today_appointments = get_appointments_date_range2(ACCESS_TOKEN, LOCATION_ID)
     print("today appoinment:", today_appointments)
+    existing_ids = set(
+    UserAppointment.objects.filter(appointment_id__in=today_appointments)
+    .values_list('appointment_id', flat=True)
+    )
+
+    # Find new appointment IDs (not in DB)
+    new_appointments = [appt_id for appt_id in today_appointments if appt_id not in existing_ids]
+
+    print("New appointments not in DB:", new_appointments)
 
     
 # def get_last_days_appointments(access_token, location_id):
@@ -712,6 +730,7 @@ def save_appointments_to_db(appointments):
         return
 
     appointment_ids = [appointment["id"] for appointment in appointments]
+    return appointment_ids
     
     # Fetch existing appointments in bulk
     existing_appointments = {ua.appointment_id: ua for ua in UserAppointment.objects.filter(appointment_id__in=appointment_ids)}
@@ -1205,7 +1224,7 @@ def get_appointments_date_range2(access_token, location_id, start_date=None, end
     
     # Default to March 1st of current year if start_date not provided
     if start_date is None:
-        start_date = (datetime.now().date() - relativedelta(months=1)) 
+        start_date = (datetime.now().date() - relativedelta(months=7)) 
     # Default to yesterday if end_date not provided
     if end_date is None:
         end_date = datetime.now(timezone).date() - timedelta(days=0)
@@ -1234,11 +1253,13 @@ def get_appointments_date_range2(access_token, location_id, start_date=None, end
             print(f"Found {len(filtered_data)} appointments for {formatted_date}")
             
             if filtered_data:
-                save_appointments_to_db(filtered_data)
-                all_appointments.extend(filtered_data)
+                ids = save_appointments_to_db(filtered_data)
+                all_appointments.extend(ids)
         
         # Move to the next day
         current_date += timedelta(days=1)
+
+    print(all_appointments)
     
     return all_appointments
 
@@ -1395,3 +1416,239 @@ def get_appointment_details():
             print(f"An error occurred: {e}")
 
     print("error appointmens list: ", error_app)    
+
+
+staffs = {
+    "Eric Cheng":"I5BcDkQF75DDv2jDIZK8",
+    "GCG Support":"e46GQO3UHWmFUVrORPLY",
+    "Jennifer Jolivette":"05qLOKE6RFNeG8sbwuWT",
+    "Jesse Moeller":"V3W8ATQ3lQOXWj5TcXkj",
+    "Lauren Barr":"8FKlyb6QMtJRKB271J9S",
+    "Max S.":"rTfwSqCtENTOFNX8QZ2v",
+    "Ruhul Amin":"BkE9BUb3xCvh5Ro9QrkG",
+    "Russ Ward":"4TpQ6ROwiIGdvPbvqQfG",
+    "Sherri Beauchamp":"R0wLHnLzfVe1a4ut67eu",
+    "Theresa Syrota":"GCrVmLVF5CwSPyHE5Llr",
+}
+
+
+
+def generate_date_ranges_payload(selected_date_str, user_id):
+    # Parse the input date (expected format: YYYY-MM-DD)
+    ist = pytz.timezone("Asia/Kolkata")
+    utc = pytz.utc
+    selected_date = datetime.strptime(selected_date_str, "%Y-%m-%d")
+
+    # Set to start of day in IST
+    current_start_ist = ist.localize(selected_date)
+    current_end_ist = current_start_ist + timedelta(days=1) - timedelta(milliseconds=1)
+
+    # Compare range is one day before current range
+    compare_start_ist = current_start_ist - timedelta(days=1)
+    compare_end_ist = current_end_ist - timedelta(days=1)
+
+    # Convert to UTC ISO format
+    compare_range = {
+        "startDate": compare_start_ist.astimezone(utc).isoformat(),
+        "endDate": compare_end_ist.astimezone(utc).isoformat()
+    }
+
+    current_range = {
+        "startDate": current_start_ist.astimezone(utc).isoformat(),
+        "endDate": current_end_ist.astimezone(utc).isoformat()
+    }
+
+    return {
+        "compareRange": compare_range,
+        "currentRange": current_range,
+        "isManual": True,
+        "locationId": "Xtj525Qgufukym5vtwbZ",
+        "userId": [user_id]
+    }
+
+
+
+def fetch_sms_last_days():
+    url = "https://backend.leadconnectorhq.com/conversations-reporting/messages/aggregate/agent"
+    token_generation_step1()
+
+    token = IdentityToolkitAuth.objects.first()
+
+
+    start_date = datetime.now() - timedelta(days=1)
+    end_date = datetime.now()
+
+    current_date = start_date
+    while current_date <= end_date:
+        token = IdentityToolkitAuth.objects.first()
+        headers = {
+            "Token-id": f"{token.id_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Source": "WEB_USER",
+            "Channel": "APP",
+            "Version": "2021-04-15"
+        }
+        date_str = current_date.strftime("%Y-%m-%d")
+        for name, uid in staffs.items():
+            payload = generate_date_ranges_payload(date_str, uid)
+            print("payload: ", payload)
+            print("current date: ", date_str)
+
+
+            response = requests.post(url, headers=headers, json=payload)
+            if response.status_code in [200, 201]:
+                data = response.json().get("results", {})
+
+                # Prepare field mappings
+                status_fields = {
+                    "sent": ("sent_status", "sent_count", "sent_change_percentage"),
+                    "delivered": ("delivered_status", "delivered_count", "delivered_change_percentage"),
+                    "clicked": ("clicked_status", "clicked_count", "clicked_change_percentage"),
+                    "failed": ("failed_status", "failed_count", "failed_change_percentage"),
+                }
+
+                update_data = {
+                    "user_name": name,
+                }
+
+                for status_key, field_names in status_fields.items():
+                    values = data.get(status_key, {})
+                    update_data[field_names[0]] = status_key
+                    update_data[field_names[1]] = values.get("count", 0)
+                    update_data[field_names[2]] = values.get("changePercentage", 0)
+
+                # Save one record per user per date
+                SMS.objects.update_or_create(
+                    user_id=uid,
+                    date=date_str,
+                    defaults=update_data
+                )
+            else:
+                print(f"Failed for {name} on {date_str}: {response.status_code} - {response.text}")
+
+        current_date += timedelta(days=1)
+
+
+
+
+def fetch_email_last_days():
+    url = "https://backend.leadconnectorhq.com/conversations-reporting/emails/aggregate/agent"
+    token_generation_step1()
+
+    token = IdentityToolkitAuth.objects.first()
+
+    headers = {
+        "Token-id": f"{token.id_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Source": "WEB_USER",
+        "Channel": "APP",
+        "Version": "2021-04-15"
+    }
+
+    start_date = datetime.now() - timedelta(days=1)
+    end_date = datetime.now()
+
+    current_date = start_date
+    while current_date <= end_date:
+        token = IdentityToolkitAuth.objects.first()
+        headers = {
+            "Token-id": f"{token.id_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Source": "WEB_USER",
+            "Channel": "APP",
+            "Version": "2021-04-15"
+        }
+        date_str = current_date.strftime("%Y-%m-%d")
+
+        for name, uid in staffs.items():
+            payload = generate_date_ranges_payload(date_str, uid)
+            print("payload: ", payload)
+            print("current date: ", date_str)
+
+            response = requests.post(url, headers=headers, json=payload)
+            if response.status_code in [200, 201]:
+                data = response.json().get("results", {})
+
+                # Field mapping based on your model
+                status_fields = {
+                    "clicked": ("clicked_status", "clicked_count", "clicked_change_percentage"),
+                    "replied": ("replied_status", "replied_count", "replied_change_percentage"),
+                    "count": ("count_status", "count_count", "count_change_percentage"),
+                    "opened": ("opened_status", "opened_count", "opened_change_percentage"),
+                }
+
+                update_data = {
+                    "user_name": name,
+                }
+
+                for status_key, field_names in status_fields.items():
+                    values = data.get(status_key, {})
+                    update_data[field_names[0]] = status_key
+                    update_data[field_names[1]] = values.get("count", 0)
+                    update_data[field_names[2]] = values.get("changePercentage", 0)
+
+                # Save the combined record
+                Email.objects.update_or_create(
+                    user_id=uid,
+                    date=date_str,
+                    defaults=update_data
+                )
+            else:
+                print(f"Failed for {name} on {date_str}: {response.status_code} - {response.text}")
+
+        current_date += timedelta(days=1)
+
+
+def funcc():
+    today_appointments = ['gBQigleGwsmrYC2HEZYm', '2XeHD387I6F6UPcQyI4V', '6H8MRA8Mmgw1z0wkLy5h', 'Bs8tkWlvoe6odyBXJcmy', 'SPcjkqMucAeagZoT5oAw', '0H2R7YflSliMmNUR0TH6', '07jMC6DRX6VKlNFq5PB6', 'ai9N0TKgmGappKsO4PvX', '7bPNns2OTQUr6hUgPA36', 'g2iL08liM1CTpRPce3UG', 'Gp4Rb0TwDHmOvDfPxaWN', 'dmxRIS9I9Eg4mVbfzCiu', 'Q4tMS5qeY2A3V2JIfoPt', 'WCWwHX3SNDW3PjPtvgOr', 'U7bcX20BIbKtPfhFUJok', 'GLeUOB9RNpDLXHtpxr0q', 'vHKOwYve8URFOD42yqRW', 'CHglk4q7mrslq6JEOYZX', 'EVJfuDsH0HXmOtvXwk0C', 'LDoFNzZVvVr0vCvskNQf', 'VafNJQhvRWnA0UA4QePJ', 'N5QxLVxXrx8SwRNbPegB', 'yxEsrPptbHH0GF1bKLc4', 'vmXmXHuULrF7zfBhcyyn', 'vhWoSW4GIzzubL5FCWtc', 'EQ2AoFoFsikPgZ3gaZD3', 'h29bzl5qqGGnPzuAMjAw', 'g822OHCGQKSnOBUnPfhs', 'HeZs7N3OgnkMuMZMPfby', 'NB7H1YgRsToT7WgokJZK', 'jFecoxhfNTTurSW9GtW9', 'WqPyNtpl9HYP0LPk4B3Y', '6Zp0LFxawVFScWbU5c1z', '4eP8CGvSkkAIrAoeFidW', 't26tquiTPObYtphytLby', '4su68QYXfuCnQxC6Gpyl', 'e5BBE4amRZnrBJuiQ8MJ', 'rxCwMcGWxvP15P5NI36p', 'b6VSQBzHc7FGqJo4sn56', 'vJezioFsPGq7dj3bVhj6', 'tf476ptEA7tkK8lvuInk', 'S9HFhUQ1yP9unk5GLwmL', 'P9ICXxfDcTEvKeELtrlx', 'VXEmCMNQUf8nH0mgqg4m', 'YLZ3l8FJkKgS2HXEUu5Y', 'Jp3ZN7WZEAQ9DvRVjgEy', '7K52G13X4J9JjRa8IGG5', 'LSpeA3YPgucHQcpKSHvz', 'inNs6AwPPNWYSdTwTYLV', 'Mp3u9gqHdL7HkzVopcgs', '8l8hz5p13iGtw7Wb14wq', '0I0wWOJvuVPULWvOhWhF', 'ZjXOCbw0OuogLjXeHQ5Z', '3rerAwunZ4NRYdAdDlQU', 'GjMSOXyPEI1JEaEh1JuB', 'Jk7BPCRKSCrhdG2ulK9Z', 'EIiNQ8oTPHmlzIVDOh8a', 'JBCyCnPBW6LKQ8iFmCPH', 'sU0kHN0piZ6LfTupMyPB', 'amKvXNtDTyaN9gmeoTFb', 'NjyUn8zgvo32urcTzjEX', '9BPb4kWIhP3RDPoLEL5y', 'UEZlc2SvpOI520Nclm5i', 'MeFulY7zeoAhYqqRhAgp', 'dGqp9inHv93604sNSxdB', 'Zu2GXlLMJ7Ad31CIOET9', 'IuuRd8OPbvZ60uRW7wTV', 'Ivf3AfTQ6baLoxiAPXFq', 'hRN3xoq6xRWPDPK3IUmX', 'aePvTKPUPeapCD7cajtO', 'DhhM3O5AylrwDaN3Y94u', 'zjoQVY1JrVXV9dGozlxK', 'WfNLI4c7nicMZUnMkw8f', '7P5VX32pyQdn1fDO6Vcc', 'QwCjgU7OXhtD1yFcscah', 'lt7HvmsO78xWXCTldSAf', 'f5W3e5flDQ7h9SzcW78M', 'mdDeXalpq4gKW295699n', 'Mw6W32goLBL23fki1rwM', 'Fzge8kxM9p4bgXfnxQHh', 'jVsVPuNAvqeW1SYkt7VL', 'BXcgKk9j5WYCM4QuTK1X', 'IvuXr7ooOCfXgRotz9C1', 'K8GAKm8nsSoJRWzyPwqv', 'hso352QpZPiWiUG3qvVl', 'WsFjt5hn5QSfPUq5oJ5c', 'ITQG1fbjgszqW1h69vYE', 'tnSr4NcjuGUpwlLr0zWZ', 'Ttj9afPpzCRsXHXmkrvT', 'hqC559jSu566BhcYPnqT', 'wSp9v2IupxRkzu1HRtQE', 'UpfEwpWLk1TP8JBUz8fz', 'GRfCYntfTQHVVIjklORs', 'q2fXjoIlXjwpEx3k8GYd', 'E49pL6znEZJdUbAwBq2W', 'r6p4iT7Bj3XaMca68P9m', 'or5kZWonhso7U4hEF5PE', 'AbtiMMLcs5SpFOZmiwpr', 'oZPLpptyR4ojTwFa8KqB', 'JMvhSZBs5bgbKnzaJDkz', 'KBut9MUOytcOFFZqoFKQ', '3a3gMa4ggXeDZzx9TaN4', 'SqZReRc9bXWRX8YDNWO6', 'hUEsw6ALlgvaNLrMRvnK', 'x7XTK8lvarkByp0gEoaH', '1dhsd4wWoDYST2WiDnGN', 'aXCj1D3hHJpbYNk4v3kE', 'SV0AeJQ3DszA3jHirr21', 'JKSxeXDfUWwNoWlFEpZP', '1UCAZq5r66FkDsSAuhi9', 'FUbsBBlvVe2DizUYbNLE', '0mLcAAHHbfmaDzLcOyNN', 'UlBbHd8RJ8aNUidPqTdq', 'F3UrSsBrOd8EyeGYFIiE', 'qsw3tMKtezoeERfxMGSn', '2YSDsq9ZgN9ETol3TeLL', 'U7ykjOjbEPNf29ZAhqBg', 'xo7csIvNyNfakh6wJJKM', 'Jb5DVdr2yreZs2ZN0u0Q', 'pK67rDK7uVoUZhbQBZrh', '8P5KsOkSk0pnbvcBwHis', 'Zmu3Nx9nAUPSV9mKibSQ', 'W0nFW8uZYBdgtEvQucU5', 'KL5uE99yeTFN5WMciPEN', '1zFe7gQ6SmmMURyZJqDV', 'ngJL8JmP9jQyfMYMC5L5', 'kAXyiY4fyIfDDktfAj74', 'eQbtoPDzfOm3hqjOpy6z', 'Wd7ue1NxK0FAiQsxXpAw', 'dmiwLBCRWUt4VYbF87hN', 'DXi767JN9IixRuFCWOqG', '24SwtxtV6cZ8EQzm5h8Q', 'yGbj7XMRpjpGtpPXcHcM', '7M3deNUNH5ollDlUtieJ', 'xutptdX7XiYPw6hJKFnl', 'oXbl4148iRL9HzXz884p', 'zGELFJQ9BNA5T4v5Px9z', 'U5MGhz6yWJuHXh8VK6TD', 'WEp9bCUbTN8NAGriD3Hp', '866NQ24iOk6wo3hZpL1E', 'o37MLRGi9LY48IpqgRDQ', 'EyfOodxZRAeAINcPJ6cR', 'vaSzcwiJCNafcClu7DeL', '4SChBObMpxkuhSUmhD9x', 'bNECYbjJmAhGMJyVbqlj', 'PckVoR4TqYzGD7D7pBs9', 'EVbI7UQqLqmFhbeH2Jks', 'Vbb7q6KPa5hDw6uDTx3N', 'TGJxIPvvAbi58M6YTtmG', 'DK6Is37UXqqsqqbz14CH', 'Q1FPKMx2gMPRtwJ9PloB', 'GHUnFZurPhNkOioZwWsD', 'owMiPquxwseaiNQctmox', 't46bHXKEXUTlybNXW79f', 'EKEDhZ7oC6co0nNZpxUz', 'SCPykKAekci1LdFCBxvf', 'cg7slmKiqc00HiiB0liH', 'SnFa3YikEkBtd2pDq6dx', 'f5GpMlYSSMmuGqBJ77vn', 'pTMyuOmTqt8hsQ1VtnHw', 'LgBelcx83sMSRyZFd7BP', 'WkZJrQpmCRDSFfOiUCBk', 'hFYyNTi1ABGsnMzCRRkC', 'HwBn1fTcIBx42vUWfXES', 'iBBD2tEPSA8MYc0J5lKC', '69XAyL6HlCgChe5WF6kf', 'Op4qtE8JqPW6VPCZttsz', 'XeIXdz2PLmvsO7tl7SuE', 'bhGduYIIiSFD9UeiSaud', 'bt2nwz5e9yvx8BTqsoqX', 'SuT0ruDSGfVdz43HqLJ3', 'ApjWQbfCAK9bbH8RHwP3', '1rHGVi6wBvfoDBRBDLCy', 'x5tdDbbf3MkWT0LfzEhB', 'd7TYlcQZ7DcluCDRq6ET', 'dvomtATnBNIkKyXlT2rH', 'cBFXPXNUVRM4IrnbEomR', 'qca6Oh3Q4UkDKrmd0wBb', 'B8pi1sKbDcVy8GYIdpXm', 'Mx7q0Zs5hSAg7DUhW9kp', 'xPxREQFxRwUcBtitTwE7', 'kIPj1windi0WGzne1yzb', 'd6fgsboPSEjs98O0LXd2', 'SQSdORWTEIEyjEN6dKBY', 'IhEeqzS79FVcpYhoocx5', 'Ljn6UOPv4F05qyBTGmhv', 'gh96qyhVaxTdX9gjNrb3', 'RXPAvyt0slt9lzVOuYdj', 't65WxcO6AHhpiLXvBa6u', 'FrArh1XfwSuafwmSoMo4', 'H600DicDFYzN3XqERPA1', 'j0JuEly0DKlbl8k8geuE', 'VrfQeIoXChYspHDFlr8M', 'jgIl5Xc0yUWTAKKrEDrh', '0fdMh27ELPwTbCvAUuGF', 'dYgrXidfiKHIg9U5AhqP', 'ZbI1m5TFYcmCpNItu0dn', 'aTlo5LViMlBW9FrMIA9z', 'oV9ZPIU2StZmqiFYfXjC', 'RIAiJ09OidAkedllkaKL', 'QNKrLOqLl0HlhJhFJGUV', '8f2OifcBd2zctKrVPcUF', 'rgzFfxJf9YhH6WlKUx6U', 'SgDMjlFthtQa0gY68Ftn', '2KHkulLkygUU1dqWVvCs', 'wWoweF41GuJPhOx2oc11', 'ERipEvhT7HH7Enx1w5B6', 'lqNXqPcL8jVnPRRMORDG', 'pq5LVCieOaEnL36PogR6', 'R4X57jLsK2nSk24r7Te2', 'Ge54IDuYAmYJSgEyF7Pw', '9pkCdiCGc88PheD930LJ', 'O4QM8wRGGNYuLYnzUL4i', 'QBCAkzYGHZPzX8zgBlIt', 'EyoxND3ce56NwWyrUMsr', 'Vl9Rlmz2ERhLyBY8pMQC', 'GqQnzMmy2rEejKEsyAWo', 'A9s6r1Sc9xDdEgJEluwV', 'mk6vITVCmwsLSbHxyKcO', 'IHBwLouucYnGKz1Q9JL7', 'Bx17Y5gvPavWtREvKWYZ', 'OwGn5MenmfI1M8bazvvb', '2C65wF4Kq7EHhhIH4URY', 'HFpHus1776zTtWZayKex', 'egloxo8P4pj4SL1DBTcq', '5nuqMSDcO2EKFX2gPOCq', '4KTFchaC2RugtGQUsEST', 'UciezwYgAVo5OdONitri', 'Ikr3k8OX2Qor3kZ5ziCd', 'TXZkDQGny718oVU9Rh95', 'Jh5j2dY9BA8KNym9NWRK', 'e9WphB9xKXsBuAInJSkn', 'LTgcbVKb0YZVeL0GXiR6', 'P5MzGqQMmJVyCXiolOii', 'D9ROeHDCLPHDXyQ9PoZ5', '28a8PtI76w3cdgmfeENs', '1Umc0ZwhLfsuqfz1Oil2', 'KDACFaBDtj6y3NZ59Lit', '86YmKVxhv03WzgzdjGbu', '3FCAqFHUq6fBxEgEZjOF', 'n5H1Dg4K9vUNMnGPKnCQ', 'eyjbXRVzHI65IsH6BhpZ', 'Nvt5zBn7ttM0SIqfjr5D', '56cdvTHu3EqUzulb15TR', 'fDUjNKRCUG2TUUDsBpLX', 'P3H16jaGVzQC0brWRMza', '85QL9bnFzoj9TS6UrQEs', 'Db7B9jyR8pqClnhy21yq', '0vGvUVUS4MH9JGmOTqSY', '0ewhPmHPM1wirm7cFBsS', 'PADCrANwLbq0GZ6wncIg', 'C7n2rll8ysnUbO7a02x3', 'g8sIuQuYKm0DYE09yjiv', 'sdriwnfb0UuMSKQrRkSh', 'ehZzAQ2gfUXMiln9lGv4', 'dbofdb5P8R1ZnG5UcTZj', 'QuodrFo7UjHiQk5lnO6X', 'RoWUx80kOUoRTCZkoUM6', 'uSpslLKvUgFhgIgifRkz', 'cxKPKMJ4r01nEpOzRmXQ', '9zSY0jWDKWYOwaL8FNbD', 'svggWfJSWBlShiObPi6V', 'kwvbok7qy3nCnq7yfDH0', 'M5Ua8JyLYyIbb0QlDv3k', 'NL3X9JwsOgvWLOXYdr0t', 'DmNc0zrPrD4CVugZdwDx', 'zw4UbvBCdsd9XKy6e6sY', 'BMe3nx0WU13yCwOwvgsU', 'mZX8YYie9qB9hk5Qak6w', 'pjGsU27xCyNQBWDyCYg9', 'nt0NCFU9bAOl0XS1FQtS', 'C2bXnWfReCcN8RU7LeFC', 'AT54wnTPTK1YQpv9Izd1', 'udVrHRDK96kZOOGyCvru', 'm1kLpy2wD2KVWKxzBGm8', 'USwjpFF9xDRU4A5ax20Z', '1BuPModiOSUTkMnF6nhP', 'SpYFYXDMn26p1DPrmCV9', 'ceIjS2zjxSwXsjIlE7xN', 'kUaKBXkDsc334KB5LNl8', 'pWq2DuFrsjs0UehOZA1a', 'XuUDwD2vhbhnK933QcFE', 'taJTdcJ7IAoEbY3fii6i', 'uB3QJExmt4clnJERcDv7', 'c7MMlZ3uh49wPMb0lGiW', '8yM4EtyfMFRX6PO0sk2g', 's9VaWRAOHpX2WCDuhJbU', 'EECOMZYCRcoEKhrd3n9n', '08zWtZHnEuTJnmGGp72u', 'VgENkNxhBrGtpHpcenRX', 'fD7GAAKEoyQfXZLVo71x', 'LESSDwfBAU1Oa2Q9dFhR', 'FEBcW6myeQk014ZdfXJb', 'ZFtCOmuWHoWzoNbk6cSD', 'yP4Wet4uMiuqodaxRGzK', 'tDzpJ6fdW2rhAysDAg7u', 'u5mgFLzu7sQzVg7HNto0', 'JomASepnkB5YCPENFMRC', 'jziQHZBJcYsV0jB6m9wl', 't9ecksFBiOXvtqSEZJr7', 'pJa9C8GW7M8VAVuucr30', 'BqiKDljNrXBSup4mYnwQ', 'mXfllLSGVwWIcSDiiQ3u', 'KZ193i32iGgAD83wwncg', 'Xh0TW1czegQr6feog1LH', 'ogre0dZbT6rZgHEvMiKI', '8bLctlD0znJ7h9zqQirf', 'oY2lHmZsIHQJBmxkhXlB', '8UL9mp4YsSJjmfzZ1IhK', 'taMYx3JpcTOtel2b8SOi', 'K9gy0xwEOH5eTikWvUnK', 'aZPGyuqvOKUYjPBXWoFo', 'Rhmv4F6DYbX6a3SH84ZH', 'mcuEmQpTubaZyk4JrQZ1', '5m1eEMCinPBVjBi5vXFp', 'x8K0Sjl69vP24EGqJoEQ', 'ypCdXRelMXPsOr0EO7zJ', 'YmhiDYOomXP1WoDNjuyy', 'bjiwK65zxZIBUU6RIL1o', 'ioBkL3xwJZyW6ShRYDTM', '8QlwLNFpKSZPdd3XlvkD', 'CLCzGa2Qd4VPBk6GHzRY', 'QcALSX64YxLJ2ZO7hi7x', 'cKWwQ2f3sIzf6vkMeQFc', 'ANh7HRQjtFHU51VmnI5W', 'H3pTqY75XZt452522uQC', 'kC2MhIoxnZWBr6T4o16r', 'Jt45GFBKREWfSOcATCu9', 'KsJh8YkHeYEP7bV5uNah', 'yyLHRm6jMJgrEEncMTiO', 'Afeas0hQxG2vRibXJRkC', 'PM0oVDl5QpHuJGMbmd7U', 'DIV6HLqIchYJsoVMuWyI', 'HAIi3wvLZgAZkAmO1QUj', 'aJD45DyrKSkFhY8vUZfO', 'qtw75Kl8XBh36EmAhPcJ', 'XVZUBvrghqZMYB53g3Ie', 'WEhl3KkvjMZttnA4oVCJ', 'Kef6pFtDJnHkudYEj7u4', '9dc11wh6lcIE9jX08CQa', 'h9We6nh0JZr5AysQZNxQ', '4N69PovSMKMFmZ82gGng', 'V8mImbnGO9C4rzsHODVI', 'ssmJwMrMQ4Ivu521ulfm', 'tXmYBYfkgDpTNZol3bha', 'RUXGyKLXzHPItyllOLI9', '1jlEV1tIRE0LINMCBOU0', '2cjsR8Zsh0ar5UTChD0t', 'kBd4kbtvtga5S08xdbGX', 'Xj6uEbqZWaM3HsTDodaW', '5lexvd0x5AtDcMF7rDgb', 'kPlBc8YzJVbrwaO9yvUI', 'ofS3e9EmcfeiHHuJlGKX', 'fsvdCRiF9UJP1dcN5tlH', 'qrTz95cKmvGsje8upxhP', 'cDoXteaZnaU3YQW9vrq6', 'ETVrHgwqSxHHa2CkWw9j', 'SgKj5hAhs2o5Azxyu2ej', 'hOsRoOXqAdo7tqCkcUUP', 'rUXVUf3tXb1mbfqSuxlI', 'DTV5nyIAW4RZW3zO6Hyq', 'w39Pxqh7EFWxreTUhfeD', 'oQoELdohGfxPnxUkZpx2', 'gQXndLxvuqUao1P2YVr8', 'xYsmraPPmcZT4MqacaT7', 'FhDYaUhsHkBm7n5sy09c', 'yVJJK8DIngLO0Eu0lC3r', '4QcWNbclAAaXRZcrkZUo', 'biBB3JG7JCVbzaA3jZgH', 'NePRs1NNl75FkHGy7PRW', 'lAXfzu8e1BH0sHT9RYaU', '3laR70DUVY3XEFreh97k', 'H2uIcOinbXQ28HuFJjTr', '6SSOb6tk8hjzZ98rpY2K', 'iWzGPuC4U9dWfUSskKTl', 'iHvBfvs4S2nPa8hky8tJ', 'z33uLbXiYQUvEg4hci1v', 'IgANt0Gg98f0lwXDtiu3', 'CXLCUxQ8yZoWVSC81gOc', 'GSBPH7EJTgJ4GQCgUecR', 'hlfaNXsuhb54LIWDn2g6', '6guHneoELHip8ftARViw', '3iBNgazwLJ0Y4hkQh5P4', 'jCs7scOyKQp3pAKq0WDV', 'IRBuDGcHOgEkdXFOUugB', 'ESiyy3uhC1EI931xL1xl', 'twxrAIDccAihWioiWcUb', 'l8YpSxWWYUMcRjDBOwJT', 'foPEZsfw1PPFzwt7kBTr', '5kj7O4aBuVEdSKJKLOX5', 'RbPlyT72iZ4I1lNArOn3', 'lYHByBiUvQTKUJXo4Nor', 't5DZREqGMvpuGe10I0ld', 'jVcZpqXuBCwLg0osfX5y', 'zVMt8SqK08ZX2u9LvK2f', 'Q5ptcp2Vi91FXKb7bfon', 'X1546thPrum1AN2R5vsc', 'aTGRAb99PMTn64cK8ZRT', 'XYT17WvrtAKchjo4TvRC', 'bPY5FMhC5N0xNcj6WoMg', 'kgkKUcwT1uCUzJTp7QLB', 'o6EvNpj2iVE4nGWnN6H7', '3J5MwaVb2anK8otPrGDQ', '5a7sRKXiWhvF6MgE65aD', 'n7ofHirnfEueuVfSpuHh', 'FPBGH60wk82SWdeAXYqr', 'tHQMuFSsgZOcESZu4eyM', 'YGvAbLufaTVeuPRm5anI', 'CQbpfR8h9MsbCv1yiUYm', 'bvFIwZXmRUa1gzcmpXxk', 'moY8p1y9wFp3JBmNwF78', 'ojC5azlVJVaCzxrfcQd7', 'K7sv3pQxQwa4HCVaTIbv', '2xapBso1yMYKwybjOnSs', 'TyVvCsZkkiTGIMJXFlVX', 'lYtmof5MBObV8UyUQbZ3', 'DajbkxiiaMaWrz9IZTUx', 'X37FAQkbdIfJxbMxMZFZ', '3twVmX54wxuYVnrzSqS8', 'tWGTNfJd8dAyqhjUYOqi', 'hMmFfEcATqAs6HWihILj', 'TO0uOiUaju9nhUhxNuHU', '2WL0RlnpudsEF23A1Gbu', '1ff1U9QpTWD6cCOutsUz', 'ejDjDyI5iFxHqVbD3iaT', 'flH61FjRJk9ivYkRr6OZ', 'iI2uGAsecnDg6ItJ7lWs', 'igi9EOplyX1am6G4SjYO', 'N640p7LRbQBaIbsSKIfU', 'Dj2ufpcOweAUaMmkU3IY', 'kpP2TjaTMfZXO2qvmvJ1', 'OOdk2dJkKSSUSMXdps98', 'L1iY4MCKvcr1PQhSu3h4', 'ZKayXtEHjdt0DBtzl7E4', 'bKWwl4iBoFqubbuvbLLZ', '5utV7sKjzLhL5MnSy397', '1ImjThz1S5yXyioXMiO9', '9cIh8ZEshJvGS4A9P7LW', 'y4Yu932TyjU4bZADgrdy', 'wv4GxrXMHG6jc3akURXJ', 'UeeAaDyE3XFP5zWcZiJn', 'u3Ymb9k3QiZ7TED8RI6h', 'g72JUWdqH2Il7OCLOV52', 'owVtN9hR0vXpjYJLOHv4', 'gj0PN0kYFBfqDelKzrRA', 'CVILEr0ZOodXTIT7DT3Y', 'FLoQ50enDt9tPyoK8B51', 'P6XcejtNfMbQPOj1B4Hv', 'FJZdWMSgOwbjYq82jl1w', 'iqrlKnprKQ2rXCmaPXVO', 'ykBKbP7HHRf1m6NDgK3t', 'GDuODJIQp2pglU2n7bBA', 'MKNfwoTFOoEloRejjyWZ', 'ucroxAWT6OvB5chb4tDp', 'R6bkvmen4rmRn5T8ZYDx', 'yTIoJs7nkI7tycs9Ezer', 'rbpwxZX2nhaoh8mQ4tTT', 'bdJ8Pv7mcvMvOcihv1hA', 'ZJjOc5DgJQYs5KkTMkzY', '6qZ5VD2PtS65GKWLjxSv', 'FYj66OWxyzwMRcezJETO', '0vWg3Ppqdh5eBxrdPlE4', 'hybFU1DI2FYpVuwzYKFe', 't38JuOkyvtoeAPuvX7KZ', 'gsIPoSXhAL9OGAw5dgky', 'w1qcn4BPlzyxZKBSV7WH', 'aPu0JUmlDSAP44glwHmN', 'L3q6Xq4RFX9MxVyYZS6W', 'uweovBlVC0Re3JYyFM7h', 'omXrC2YSTHjbnlWj5BSN', 'QAtPJwFdnmjWTs1twJRD', 'rarAgYO3gv3nw3VnSFW8', 'FWT4TlpYPrKbPqfLqEXI', 'z1HlRyotra4GczlQCxrr', 'SRRQdqCMFRlrpCDmtYsg', '3Ucj2SVBgsLlFMtnS5Aw', '8ZSaDIs5vZL2FsMRwsu4', 'DoCTvBww1SZh2gstBB1i', 'YuttjZFMdFxim9Kdvm4Z', 'gYEyBfTDXCH6qJSzLS8P', 'VfgwBdyP7GcEoLaKkmWf', 'Sx5mvq0smizP9mxrePIB', 'sfDPCMcAioytlOwgFjgd', 'Luf6TmkJXBAHk8H9Job3', 'obS0ekdE4TYq0V3QBe7Y', 'xBUQbKd4e24lrfdXFTUp', 'B07P3SYSijw2oGp5rqHk', 'd3IbxjBIcivhfpqEJ3Wk', 'Hp43BhfZZ1h8lRplVhQl', 'xPXHbwhTKUBCJr4QiyRQ']
+
+
+    ff = ['gBQigleGwsmrYC2HEZYm', '2XeHD387I6F6UPcQyI4V', '6H8MRA8Mmgw1z0wkLy5h', 'Bs8tkWlvoe6odyBXJcmy', 'SPcjkqMucAeagZoT5oAw', '0H2R7YflSliMmNUR0TH6', '07jMC6DRX6VKlNFq5PB6', 'ai9N0TKgmGappKsO4PvX', '7bPNns2OTQUr6hUgPA36', 'g2iL08liM1CTpRPce3UG', 'Gp4Rb0TwDHmOvDfPxaWN', 'dmxRIS9I9Eg4mVbfzCiu', 'Q4tMS5qeY2A3V2JIfoPt', 'WCWwHX3SNDW3PjPtvgOr', 'U7bcX20BIbKtPfhFUJok', 'GLeUOB9RNpDLXHtpxr0q', 'vHKOwYve8URFOD42yqRW', 'CHglk4q7mrslq6JEOYZX', 'EVJfuDsH0HXmOtvXwk0C', 'LDoFNzZVvVr0vCvskNQf', 'VafNJQhvRWnA0UA4QePJ', 'N5QxLVxXrx8SwRNbPegB', 'yxEsrPptbHH0GF1bKLc4', 'vmXmXHuULrF7zfBhcyyn', 'vhWoSW4GIzzubL5FCWtc', 'EQ2AoFoFsikPgZ3gaZD3', 'h29bzl5qqGGnPzuAMjAw', 'g822OHCGQKSnOBUnPfhs', 'HeZs7N3OgnkMuMZMPfby', 'NB7H1YgRsToT7WgokJZK', 'jFecoxhfNTTurSW9GtW9', 'WqPyNtpl9HYP0LPk4B3Y', '6Zp0LFxawVFScWbU5c1z', '4eP8CGvSkkAIrAoeFidW', 't26tquiTPObYtphytLby', '4su68QYXfuCnQxC6Gpyl', 'e5BBE4amRZnrBJuiQ8MJ', 'rxCwMcGWxvP15P5NI36p', 'b6VSQBzHc7FGqJo4sn56', 'vJezioFsPGq7dj3bVhj6', 'tf476ptEA7tkK8lvuInk', 'S9HFhUQ1yP9unk5GLwmL', 'P9ICXxfDcTEvKeELtrlx', 'VXEmCMNQUf8nH0mgqg4m', 'YLZ3l8FJkKgS2HXEUu5Y', 'Jp3ZN7WZEAQ9DvRVjgEy', '7K52G13X4J9JjRa8IGG5', 'LSpeA3YPgucHQcpKSHvz', 'inNs6AwPPNWYSdTwTYLV', 'Mp3u9gqHdL7HkzVopcgs', '8l8hz5p13iGtw7Wb14wq', '0I0wWOJvuVPULWvOhWhF', 'ZjXOCbw0OuogLjXeHQ5Z', '3rerAwunZ4NRYdAdDlQU', 'GjMSOXyPEI1JEaEh1JuB', 'Jk7BPCRKSCrhdG2ulK9Z', 'EIiNQ8oTPHmlzIVDOh8a', 'JBCyCnPBW6LKQ8iFmCPH', 'sU0kHN0piZ6LfTupMyPB', 'amKvXNtDTyaN9gmeoTFb', 'NjyUn8zgvo32urcTzjEX', '9BPb4kWIhP3RDPoLEL5y', 'UEZlc2SvpOI520Nclm5i', 'MeFulY7zeoAhYqqRhAgp', 'dGqp9inHv93604sNSxdB', 'Zu2GXlLMJ7Ad31CIOET9', 'IuuRd8OPbvZ60uRW7wTV', 'Ivf3AfTQ6baLoxiAPXFq', 'hRN3xoq6xRWPDPK3IUmX', 'aePvTKPUPeapCD7cajtO', 'DhhM3O5AylrwDaN3Y94u', 'zjoQVY1JrVXV9dGozlxK', 'WfNLI4c7nicMZUnMkw8f', '7P5VX32pyQdn1fDO6Vcc', 'QwCjgU7OXhtD1yFcscah', 'lt7HvmsO78xWXCTldSAf', 'f5W3e5flDQ7h9SzcW78M', 'mdDeXalpq4gKW295699n', 'Mw6W32goLBL23fki1rwM', 'Fzge8kxM9p4bgXfnxQHh', 'jVsVPuNAvqeW1SYkt7VL', 'BXcgKk9j5WYCM4QuTK1X', 'IvuXr7ooOCfXgRotz9C1', 'K8GAKm8nsSoJRWzyPwqv', 'hso352QpZPiWiUG3qvVl', 'WsFjt5hn5QSfPUq5oJ5c', 'ITQG1fbjgszqW1h69vYE', 'tnSr4NcjuGUpwlLr0zWZ', 'Ttj9afPpzCRsXHXmkrvT', 'hqC559jSu566BhcYPnqT', 'wSp9v2IupxRkzu1HRtQE', 'UpfEwpWLk1TP8JBUz8fz', 'GRfCYntfTQHVVIjklORs', 'q2fXjoIlXjwpEx3k8GYd', 'E49pL6znEZJdUbAwBq2W', 'r6p4iT7Bj3XaMca68P9m', 'or5kZWonhso7U4hEF5PE', 'AbtiMMLcs5SpFOZmiwpr', 'oZPLpptyR4ojTwFa8KqB', 'JMvhSZBs5bgbKnzaJDkz', 'KBut9MUOytcOFFZqoFKQ', '3a3gMa4ggXeDZzx9TaN4', 'SqZReRc9bXWRX8YDNWO6', 'hUEsw6ALlgvaNLrMRvnK', 'x7XTK8lvarkByp0gEoaH', '1dhsd4wWoDYST2WiDnGN', 'aXCj1D3hHJpbYNk4v3kE', 'SV0AeJQ3DszA3jHirr21', 'JKSxeXDfUWwNoWlFEpZP', '1UCAZq5r66FkDsSAuhi9', 'FUbsBBlvVe2DizUYbNLE', '0mLcAAHHbfmaDzLcOyNN', 'UlBbHd8RJ8aNUidPqTdq', 'F3UrSsBrOd8EyeGYFIiE', 'qsw3tMKtezoeERfxMGSn', '2YSDsq9ZgN9ETol3TeLL', 'U7ykjOjbEPNf29ZAhqBg', 'xo7csIvNyNfakh6wJJKM', 'Jb5DVdr2yreZs2ZN0u0Q', 'pK67rDK7uVoUZhbQBZrh', '8P5KsOkSk0pnbvcBwHis', 'Zmu3Nx9nAUPSV9mKibSQ', 'W0nFW8uZYBdgtEvQucU5', 'KL5uE99yeTFN5WMciPEN', '1zFe7gQ6SmmMURyZJqDV', 'ngJL8JmP9jQyfMYMC5L5', 'kAXyiY4fyIfDDktfAj74', 'eQbtoPDzfOm3hqjOpy6z', 'Wd7ue1NxK0FAiQsxXpAw', 'dmiwLBCRWUt4VYbF87hN', 'DXi767JN9IixRuFCWOqG', '24SwtxtV6cZ8EQzm5h8Q', 'yGbj7XMRpjpGtpPXcHcM', '7M3deNUNH5ollDlUtieJ', 'xutptdX7XiYPw6hJKFnl', 'oXbl4148iRL9HzXz884p', 'zGELFJQ9BNA5T4v5Px9z', 'U5MGhz6yWJuHXh8VK6TD', 'WEp9bCUbTN8NAGriD3Hp', '866NQ24iOk6wo3hZpL1E', 'o37MLRGi9LY48IpqgRDQ', 'EyfOodxZRAeAINcPJ6cR', 'vaSzcwiJCNafcClu7DeL', '4SChBObMpxkuhSUmhD9x', 'bNECYbjJmAhGMJyVbqlj', 'PckVoR4TqYzGD7D7pBs9', 'EVbI7UQqLqmFhbeH2Jks', 'Vbb7q6KPa5hDw6uDTx3N', 'TGJxIPvvAbi58M6YTtmG', 'DK6Is37UXqqsqqbz14CH', 'Q1FPKMx2gMPRtwJ9PloB', 'GHUnFZurPhNkOioZwWsD', 'owMiPquxwseaiNQctmox', 't46bHXKEXUTlybNXW79f', 'EKEDhZ7oC6co0nNZpxUz', 'SCPykKAekci1LdFCBxvf', 'cg7slmKiqc00HiiB0liH', 'SnFa3YikEkBtd2pDq6dx', 'f5GpMlYSSMmuGqBJ77vn', 'pTMyuOmTqt8hsQ1VtnHw', 'LgBelcx83sMSRyZFd7BP', 'WkZJrQpmCRDSFfOiUCBk', 'hFYyNTi1ABGsnMzCRRkC', 'HwBn1fTcIBx42vUWfXES', 'iBBD2tEPSA8MYc0J5lKC', '69XAyL6HlCgChe5WF6kf', 'Op4qtE8JqPW6VPCZttsz', 'XeIXdz2PLmvsO7tl7SuE', 'bhGduYIIiSFD9UeiSaud', 'bt2nwz5e9yvx8BTqsoqX', 'SuT0ruDSGfVdz43HqLJ3', 'ApjWQbfCAK9bbH8RHwP3', '1rHGVi6wBvfoDBRBDLCy', 'x5tdDbbf3MkWT0LfzEhB', 'd7TYlcQZ7DcluCDRq6ET', 'dvomtATnBNIkKyXlT2rH', 'cBFXPXNUVRM4IrnbEomR', 'qca6Oh3Q4UkDKrmd0wBb', 'B8pi1sKbDcVy8GYIdpXm', 'Mx7q0Zs5hSAg7DUhW9kp', 'xPxREQFxRwUcBtitTwE7', 'kIPj1windi0WGzne1yzb', 'd6fgsboPSEjs98O0LXd2', 'SQSdORWTEIEyjEN6dKBY', 'IhEeqzS79FVcpYhoocx5', 'Ljn6UOPv4F05qyBTGmhv', 'gh96qyhVaxTdX9gjNrb3', 'RXPAvyt0slt9lzVOuYdj', 't65WxcO6AHhpiLXvBa6u', 'FrArh1XfwSuafwmSoMo4', 'H600DicDFYzN3XqERPA1', 'j0JuEly0DKlbl8k8geuE', 'VrfQeIoXChYspHDFlr8M', 'jgIl5Xc0yUWTAKKrEDrh', '0fdMh27ELPwTbCvAUuGF', 'dYgrXidfiKHIg9U5AhqP', 'ZbI1m5TFYcmCpNItu0dn', 'aTlo5LViMlBW9FrMIA9z', 'oV9ZPIU2StZmqiFYfXjC', 'RIAiJ09OidAkedllkaKL', 'QNKrLOqLl0HlhJhFJGUV', '8f2OifcBd2zctKrVPcUF', 'rgzFfxJf9YhH6WlKUx6U', 'SgDMjlFthtQa0gY68Ftn', '2KHkulLkygUU1dqWVvCs', 'wWoweF41GuJPhOx2oc11', 'ERipEvhT7HH7Enx1w5B6', 'lqNXqPcL8jVnPRRMORDG', 'pq5LVCieOaEnL36PogR6', 'R4X57jLsK2nSk24r7Te2', 'Ge54IDuYAmYJSgEyF7Pw', '9pkCdiCGc88PheD930LJ', 'O4QM8wRGGNYuLYnzUL4i', 'QBCAkzYGHZPzX8zgBlIt', 'EyoxND3ce56NwWyrUMsr', 'Vl9Rlmz2ERhLyBY8pMQC', 'GqQnzMmy2rEejKEsyAWo', 'A9s6r1Sc9xDdEgJEluwV', 'mk6vITVCmwsLSbHxyKcO', 'IHBwLouucYnGKz1Q9JL7', 'Bx17Y5gvPavWtREvKWYZ', 'OwGn5MenmfI1M8bazvvb', '2C65wF4Kq7EHhhIH4URY', 'HFpHus1776zTtWZayKex', 'egloxo8P4pj4SL1DBTcq', '5nuqMSDcO2EKFX2gPOCq', '4KTFchaC2RugtGQUsEST', 'UciezwYgAVo5OdONitri', 'Ikr3k8OX2Qor3kZ5ziCd', 'TXZkDQGny718oVU9Rh95', 'Jh5j2dY9BA8KNym9NWRK', 'e9WphB9xKXsBuAInJSkn', 'LTgcbVKb0YZVeL0GXiR6', 'P5MzGqQMmJVyCXiolOii', 'D9ROeHDCLPHDXyQ9PoZ5', '28a8PtI76w3cdgmfeENs', '1Umc0ZwhLfsuqfz1Oil2', 'KDACFaBDtj6y3NZ59Lit', '86YmKVxhv03WzgzdjGbu', '3FCAqFHUq6fBxEgEZjOF', 'n5H1Dg4K9vUNMnGPKnCQ', 'eyjbXRVzHI65IsH6BhpZ', 'Nvt5zBn7ttM0SIqfjr5D', '56cdvTHu3EqUzulb15TR', 'fDUjNKRCUG2TUUDsBpLX', 'P3H16jaGVzQC0brWRMza', '85QL9bnFzoj9TS6UrQEs', 'Db7B9jyR8pqClnhy21yq', '0vGvUVUS4MH9JGmOTqSY', '0ewhPmHPM1wirm7cFBsS', 'PADCrANwLbq0GZ6wncIg', 'C7n2rll8ysnUbO7a02x3', 'g8sIuQuYKm0DYE09yjiv', 'sdriwnfb0UuMSKQrRkSh', 'ehZzAQ2gfUXMiln9lGv4', 'dbofdb5P8R1ZnG5UcTZj', 'QuodrFo7UjHiQk5lnO6X', 'RoWUx80kOUoRTCZkoUM6', 'uSpslLKvUgFhgIgifRkz', 'cxKPKMJ4r01nEpOzRmXQ', '9zSY0jWDKWYOwaL8FNbD', 'svggWfJSWBlShiObPi6V', 'kwvbok7qy3nCnq7yfDH0', 'M5Ua8JyLYyIbb0QlDv3k', 'NL3X9JwsOgvWLOXYdr0t', 'DmNc0zrPrD4CVugZdwDx', 'zw4UbvBCdsd9XKy6e6sY', 'BMe3nx0WU13yCwOwvgsU', 'mZX8YYie9qB9hk5Qak6w', 'pjGsU27xCyNQBWDyCYg9', 'nt0NCFU9bAOl0XS1FQtS', 'C2bXnWfReCcN8RU7LeFC', 'AT54wnTPTK1YQpv9Izd1', 'udVrHRDK96kZOOGyCvru', 'm1kLpy2wD2KVWKxzBGm8', 'USwjpFF9xDRU4A5ax20Z', '1BuPModiOSUTkMnF6nhP', 'SpYFYXDMn26p1DPrmCV9', 'ceIjS2zjxSwXsjIlE7xN', 'kUaKBXkDsc334KB5LNl8', 'pWq2DuFrsjs0UehOZA1a', 'XuUDwD2vhbhnK933QcFE', 'taJTdcJ7IAoEbY3fii6i', 'uB3QJExmt4clnJERcDv7', 'c7MMlZ3uh49wPMb0lGiW', '8yM4EtyfMFRX6PO0sk2g', 's9VaWRAOHpX2WCDuhJbU', 'EECOMZYCRcoEKhrd3n9n', '08zWtZHnEuTJnmGGp72u', 'VgENkNxhBrGtpHpcenRX', 'fD7GAAKEoyQfXZLVo71x', 'LESSDwfBAU1Oa2Q9dFhR', 'FEBcW6myeQk014ZdfXJb', 'ZFtCOmuWHoWzoNbk6cSD', 'yP4Wet4uMiuqodaxRGzK', 'tDzpJ6fdW2rhAysDAg7u', 'u5mgFLzu7sQzVg7HNto0', 'JomASepnkB5YCPENFMRC', 'jziQHZBJcYsV0jB6m9wl', 't9ecksFBiOXvtqSEZJr7', 'pJa9C8GW7M8VAVuucr30', 'BqiKDljNrXBSup4mYnwQ', 'mXfllLSGVwWIcSDiiQ3u', 'KZ193i32iGgAD83wwncg', 'Xh0TW1czegQr6feog1LH', 'ogre0dZbT6rZgHEvMiKI', '8bLctlD0znJ7h9zqQirf', 'oY2lHmZsIHQJBmxkhXlB', '8UL9mp4YsSJjmfzZ1IhK', 'taMYx3JpcTOtel2b8SOi', 'K9gy0xwEOH5eTikWvUnK', 'aZPGyuqvOKUYjPBXWoFo', 'Rhmv4F6DYbX6a3SH84ZH', 'mcuEmQpTubaZyk4JrQZ1', '5m1eEMCinPBVjBi5vXFp', 'x8K0Sjl69vP24EGqJoEQ', 'ypCdXRelMXPsOr0EO7zJ', 'YmhiDYOomXP1WoDNjuyy', 'bjiwK65zxZIBUU6RIL1o', 'ioBkL3xwJZyW6ShRYDTM', '8QlwLNFpKSZPdd3XlvkD', 'CLCzGa2Qd4VPBk6GHzRY', 'QcALSX64YxLJ2ZO7hi7x', 'cKWwQ2f3sIzf6vkMeQFc', 'ANh7HRQjtFHU51VmnI5W', 'H3pTqY75XZt452522uQC', 'kC2MhIoxnZWBr6T4o16r', 'Jt45GFBKREWfSOcATCu9', 'KsJh8YkHeYEP7bV5uNah', 'yyLHRm6jMJgrEEncMTiO', 'Afeas0hQxG2vRibXJRkC', 'PM0oVDl5QpHuJGMbmd7U', 'DIV6HLqIchYJsoVMuWyI', 'HAIi3wvLZgAZkAmO1QUj', 'aJD45DyrKSkFhY8vUZfO', 'qtw75Kl8XBh36EmAhPcJ', 'XVZUBvrghqZMYB53g3Ie', 'WEhl3KkvjMZttnA4oVCJ', 'Kef6pFtDJnHkudYEj7u4', '9dc11wh6lcIE9jX08CQa', 'h9We6nh0JZr5AysQZNxQ', '4N69PovSMKMFmZ82gGng', 'V8mImbnGO9C4rzsHODVI', 'ssmJwMrMQ4Ivu521ulfm', 'tXmYBYfkgDpTNZol3bha', 'RUXGyKLXzHPItyllOLI9', '1jlEV1tIRE0LINMCBOU0', '2cjsR8Zsh0ar5UTChD0t', 'kBd4kbtvtga5S08xdbGX', 'Xj6uEbqZWaM3HsTDodaW', '5lexvd0x5AtDcMF7rDgb', 'kPlBc8YzJVbrwaO9yvUI', 'ofS3e9EmcfeiHHuJlGKX', 'fsvdCRiF9UJP1dcN5tlH', 'qrTz95cKmvGsje8upxhP', 'cDoXteaZnaU3YQW9vrq6', 'ETVrHgwqSxHHa2CkWw9j', 'SgKj5hAhs2o5Azxyu2ej', 'hOsRoOXqAdo7tqCkcUUP', 'rUXVUf3tXb1mbfqSuxlI', 'DTV5nyIAW4RZW3zO6Hyq', 'w39Pxqh7EFWxreTUhfeD', 'oQoELdohGfxPnxUkZpx2', 'gQXndLxvuqUao1P2YVr8', 'xYsmraPPmcZT4MqacaT7', 'FhDYaUhsHkBm7n5sy09c', 'yVJJK8DIngLO0Eu0lC3r', '4QcWNbclAAaXRZcrkZUo', 'biBB3JG7JCVbzaA3jZgH', 'NePRs1NNl75FkHGy7PRW', 'lAXfzu8e1BH0sHT9RYaU', '3laR70DUVY3XEFreh97k', 'H2uIcOinbXQ28HuFJjTr', '6SSOb6tk8hjzZ98rpY2K', 'iWzGPuC4U9dWfUSskKTl', 'iHvBfvs4S2nPa8hky8tJ', 'z33uLbXiYQUvEg4hci1v', 'IgANt0Gg98f0lwXDtiu3', 'CXLCUxQ8yZoWVSC81gOc', 'GSBPH7EJTgJ4GQCgUecR', 'hlfaNXsuhb54LIWDn2g6', '6guHneoELHip8ftARViw', '3iBNgazwLJ0Y4hkQh5P4', 'jCs7scOyKQp3pAKq0WDV', 'IRBuDGcHOgEkdXFOUugB', 'ESiyy3uhC1EI931xL1xl', 'twxrAIDccAihWioiWcUb', 'l8YpSxWWYUMcRjDBOwJT', 'foPEZsfw1PPFzwt7kBTr', '5kj7O4aBuVEdSKJKLOX5', 'RbPlyT72iZ4I1lNArOn3', 'lYHByBiUvQTKUJXo4Nor', 't5DZREqGMvpuGe10I0ld', 'jVcZpqXuBCwLg0osfX5y', 'zVMt8SqK08ZX2u9LvK2f', 'Q5ptcp2Vi91FXKb7bfon', 'X1546thPrum1AN2R5vsc', 'aTGRAb99PMTn64cK8ZRT', 'XYT17WvrtAKchjo4TvRC', 'bPY5FMhC5N0xNcj6WoMg', 'kgkKUcwT1uCUzJTp7QLB', 'o6EvNpj2iVE4nGWnN6H7', '3J5MwaVb2anK8otPrGDQ', '5a7sRKXiWhvF6MgE65aD', 'n7ofHirnfEueuVfSpuHh', 'FPBGH60wk82SWdeAXYqr', 'tHQMuFSsgZOcESZu4eyM', 'YGvAbLufaTVeuPRm5anI', 'CQbpfR8h9MsbCv1yiUYm', 'bvFIwZXmRUa1gzcmpXxk', 'moY8p1y9wFp3JBmNwF78', 'ojC5azlVJVaCzxrfcQd7', 'K7sv3pQxQwa4HCVaTIbv', '2xapBso1yMYKwybjOnSs', 'TyVvCsZkkiTGIMJXFlVX', 'lYtmof5MBObV8UyUQbZ3', 'DajbkxiiaMaWrz9IZTUx', 'X37FAQkbdIfJxbMxMZFZ', '3twVmX54wxuYVnrzSqS8', 'tWGTNfJd8dAyqhjUYOqi', 'hMmFfEcATqAs6HWihILj', 'TO0uOiUaju9nhUhxNuHU', '2WL0RlnpudsEF23A1Gbu', '1ff1U9QpTWD6cCOutsUz', 'ejDjDyI5iFxHqVbD3iaT', 'flH61FjRJk9ivYkRr6OZ', 'iI2uGAsecnDg6ItJ7lWs', 'igi9EOplyX1am6G4SjYO', 'N640p7LRbQBaIbsSKIfU', 'Dj2ufpcOweAUaMmkU3IY', 'kpP2TjaTMfZXO2qvmvJ1', 'OOdk2dJkKSSUSMXdps98', 'L1iY4MCKvcr1PQhSu3h4', 'ZKayXtEHjdt0DBtzl7E4', 'bKWwl4iBoFqubbuvbLLZ', '5utV7sKjzLhL5MnSy397', '1ImjThz1S5yXyioXMiO9', '9cIh8ZEshJvGS4A9P7LW', 'y4Yu932TyjU4bZADgrdy', 'wv4GxrXMHG6jc3akURXJ', 'UeeAaDyE3XFP5zWcZiJn', 'u3Ymb9k3QiZ7TED8RI6h', 'g72JUWdqH2Il7OCLOV52', 'owVtN9hR0vXpjYJLOHv4', 'gj0PN0kYFBfqDelKzrRA', 'CVILEr0ZOodXTIT7DT3Y', 'FLoQ50enDt9tPyoK8B51', 'P6XcejtNfMbQPOj1B4Hv', 'FJZdWMSgOwbjYq82jl1w', 'iqrlKnprKQ2rXCmaPXVO', 'ykBKbP7HHRf1m6NDgK3t', 'GDuODJIQp2pglU2n7bBA', 'MKNfwoTFOoEloRejjyWZ', 'ucroxAWT6OvB5chb4tDp', 'R6bkvmen4rmRn5T8ZYDx', 'yTIoJs7nkI7tycs9Ezer', 'rbpwxZX2nhaoh8mQ4tTT', 'bdJ8Pv7mcvMvOcihv1hA', 'ZJjOc5DgJQYs5KkTMkzY', '6qZ5VD2PtS65GKWLjxSv', 'FYj66OWxyzwMRcezJETO', '0vWg3Ppqdh5eBxrdPlE4', 'hybFU1DI2FYpVuwzYKFe', 't38JuOkyvtoeAPuvX7KZ', 'gsIPoSXhAL9OGAw5dgky', 'w1qcn4BPlzyxZKBSV7WH', 'aPu0JUmlDSAP44glwHmN', 'L3q6Xq4RFX9MxVyYZS6W', 'uweovBlVC0Re3JYyFM7h', 'omXrC2YSTHjbnlWj5BSN', 'QAtPJwFdnmjWTs1twJRD', 'rarAgYO3gv3nw3VnSFW8', 'FWT4TlpYPrKbPqfLqEXI', 'z1HlRyotra4GczlQCxrr', 'SRRQdqCMFRlrpCDmtYsg', '3Ucj2SVBgsLlFMtnS5Aw', '8ZSaDIs5vZL2FsMRwsu4', 'DoCTvBww1SZh2gstBB1i', 'YuttjZFMdFxim9Kdvm4Z', 'gYEyBfTDXCH6qJSzLS8P', 'VfgwBdyP7GcEoLaKkmWf', 'Sx5mvq0smizP9mxrePIB', 'sfDPCMcAioytlOwgFjgd', 'Luf6TmkJXBAHk8H9Job3', 'obS0ekdE4TYq0V3QBe7Y', 'xBUQbKd4e24lrfdXFTUp', 'B07P3SYSijw2oGp5rqHk', 'd3IbxjBIcivhfpqEJ3Wk', 'Hp43BhfZZ1h8lRplVhQl', 'xPXHbwhTKUBCJr4QiyRQ']
+    print(len(ff))
+    existing_ids = set(
+    UserAppointment.objects.filter(appointment_id__in=today_appointments)
+    .values_list('appointment_id', flat=True)
+    )
+
+    # Find new appointment IDs (not in DB)
+    new_appointments = [appt_id for appt_id in today_appointments if appt_id not in existing_ids]
+
+    print("New appointments not in DB:", new_appointments)
+
+
+
+
+def fetch_xlsx_appointment(filepath):
+    try:
+        df = pd.read_excel(filepath)
+        
+    except Exception as e:
+        print(f"Error reading Excel file: {e}")
+        return None
+    
+    arr = []
+    dict1 = dict()
+    for column, row in df.iterrows():
+        # print(row['Appointment Id'])
+        arr.append(row["Appointment Id"])
+        if row["Outcome"] not in dict1:
+            dict1[row["Outcome"]] = 1
+        else:
+            dict1[row["Outcome"]] += 1
+
+
+    print(dict1)
+
+    existing_ids = set(
+        UserAppointment.objects.all()
+        .values_list('appointment_id', flat=True)
+    )
+
+    missing_from_arr = existing_ids - set(arr)
+
+    UserAppointment.objects.filter(appointment_id__in = missing_from_arr).delete()
+    print(len(missing_from_arr))
+    print(missing_from_arr)

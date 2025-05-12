@@ -295,3 +295,60 @@ class WebhookLog(models.Model):
 
     def __str__(self):
         return f"{self.webhook_id} : {self.received_at}"
+    
+
+
+class SMS(models.Model):
+    user_id = models.CharField(max_length=100)
+    user_name = models.CharField(max_length=100)
+    clicked_status = models.CharField(max_length=50, null=True, blank=True)
+    clicked_count = models.IntegerField(default=0)
+    clicked_change_percentage = models.IntegerField(default=0)
+
+    sent_status = models.CharField(max_length=50, null=True, blank=True)
+    sent_count = models.IntegerField(default=0)
+    sent_change_percentage = models.IntegerField(default=0)
+
+    delivered_status = models.CharField(max_length=50, null=True, blank=True)
+    delivered_count = models.IntegerField(default=0)
+    delivered_change_percentage = models.IntegerField(default=0)
+
+    failed_status = models.CharField(max_length=50, null=True, blank=True)
+    failed_count = models.IntegerField(default=0)
+    failed_change_percentage = models.IntegerField(default=0)
+
+    date = models.CharField(max_length=50, null=True, blank=True)
+
+    class Meta:
+        db_table = 'sms'
+
+    def __str__(self):
+        return f"{self.user_name}"
+    
+
+class Email(models.Model):
+    user_id = models.CharField(max_length=100)
+    user_name = models.CharField(max_length=100)
+    clicked_status = models.CharField(max_length=50, null=True, blank=True)
+    clicked_count = models.IntegerField(default=0)
+    clicked_change_percentage = models.IntegerField(default=0)
+
+    replied_status = models.CharField(max_length=50, null=True, blank=True)
+    replied_count = models.IntegerField(default=0)
+    replied_change_percentage = models.IntegerField(default=0)
+
+    count_status = models.CharField(max_length=50, null=True, blank=True)
+    count_count = models.IntegerField(default=0)
+    count_change_percentage = models.IntegerField(default=0)
+
+    opened_status = models.CharField(max_length=50, null=True, blank=True)
+    opened_count = models.IntegerField(default=0)
+    opened_change_percentage = models.IntegerField(default=0)
+
+    date = models.CharField(max_length=50, null=True, blank=True)
+
+    class Meta:
+        db_table = 'email'
+
+    def __str__(self):
+        return f"{self.user_name}"

@@ -5,15 +5,19 @@ from accounts.models import GHLAuthCredentials, Contact, UserAppointment, Opport
 from accounts.services import get_ghl_contact, get_ghl_appointment, get_ghl_opportunity,fetch_calendar_data
 from decouple import config
 from accounts.helpers import create_or_update_contact, update_opportunity, create_opportunity
-from accounts.utils import fetch_and_store_google_campaigns,fetch_campaigns_facebook, fetch_calls_for_last_days,appoinment_fetch_usage,fetch_opportunities, fetch_contacts
+from accounts.utils import token_generation_step1,fetch_sms_last_days, fetch_email_last_days
 
 @shared_task
 def make_api_call():
-    fetch_and_store_google_campaigns()
+    # fetch_and_store_google_campaigns()
+    # fetch_calls_for_last_days()
+    token_generation_step1()
+    fetch_email_last_days()
+    fetch_sms_last_days()
+
     # fetch_opportunities()
     # appoinment_fetch_usage()
     # fetch_campaigns_facebook()
-    fetch_calls_for_last_days()
     # fetch_contacts()
     return
     

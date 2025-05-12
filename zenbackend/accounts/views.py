@@ -22,11 +22,8 @@ def webhook_handler_for_opportunity(request):
         event_type = data.get("type")
         handle_webhook_event.delay(data, event_type)
         return JsonResponse({"message":"Webhook received"}, status=200)
-
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
-
-
 
 
 @csrf_exempt
